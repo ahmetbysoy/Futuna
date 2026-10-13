@@ -41,6 +41,29 @@ test('session recorder starts, stops, and exports JSON', async ({ page }) => {
   expect(download.suggestedFilename()).toMatch(/\.json$/)
 })
 
+test('order-flow chart layers survive theme changes and narrow resizes', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.goto('/')
+
+  const chart = page.locator('.chart-visual')
+  await expect(chart).toBeVisible()
+  await expect(page.locator('.depth-status--live')).toBeVisible()
+  await expect.poll(() => chart.locator('canvas').count()).toBeGreaterThan(0)
+  const themeSwitch = page.getByRole('button', { name: /temaya geç/ })
+  await expect(themeSwitch).toBeVisible()
+  const nextThemeLabel = await themeSwitch.getAttribute('aria-label') === 'Açık temaya geç'
+    ? 'Koyu temaya geç'
+    : 'Açık temaya geç'
+  await themeSwitch.click()
+  await expect(page.getByRole('button', { name: nextThemeLabel })).toBeVisible()
+
+  await page.setViewportSize({ width: 375, height: 812 })
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy()
+  await expect(chart.locator('canvas').first()).toBeVisible()
+  expect(pageErrors).toEqual([])
+})
+
 test('scanner processes the mocked USDT market universe', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('navigation', { name: 'Ana gezinme' }).getByRole('button', { name: 'Tarayıcı', exact: true }).click()

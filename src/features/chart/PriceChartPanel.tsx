@@ -68,6 +68,7 @@ export function PriceChartPanel() {
           liveCandle={liveCandle}
           symbol={symbol}
           timeframe={timeframe}
+          marketMode={mode}
           theme={theme}
           showEma={settings.showEma}
           showVolume={settings.showVolume}

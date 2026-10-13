@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   CandlestickSeries,
   ColorType,
@@ -6,21 +6,33 @@ import {
   HistogramSeries,
   LineSeries,
   createChart,
+  createSeriesMarkers,
   type IChartApi,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
   type Time,
 } from 'lightweight-charts'
 import { Pause, Play, ArrowsOutSimple } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/Button'
 import { formatPrice, formatTime } from '@/lib/format'
 import { bollinger, ema, parabolicSar, vwap } from '@/lib/math'
-import type { Candle, Timeframe } from '@/features/market/types'
+import type { Candle, MarketMode, Timeframe } from '@/features/market/types'
+import { orderflowStore } from '@/features/orderflow/orderflowStore'
+import { DepthPrimitive, type DepthOverlayOptions } from '@/features/orderflow/chart/DepthPrimitive'
+import { flowEventsToMarkers } from '@/features/orderflow/chart/flowMarkers'
+
+export interface PriceChartLifecycle {
+  chart: IChartApi
+  candleSeries: ISeriesApi<'Candlestick'>
+  volumeSeries: ISeriesApi<'Histogram'>
+}
 
 interface PriceChartProps {
   candles: Candle[]
   liveCandle: Candle | null
   symbol: string
   timeframe: Timeframe
+  marketMode: MarketMode
   theme: 'dark' | 'light'
   showEma: boolean
   showVolume: boolean
@@ -32,6 +44,8 @@ interface PriceChartProps {
   bbPeriod: number
   bbStd: number
   loading: boolean
+  orderflowOverlay?: Partial<DepthOverlayOptions>
+  onChartReady?: (lifecycle: PriceChartLifecycle | null) => void
 }
 
 const PALETTE = {
@@ -57,11 +71,20 @@ function linePoints(values: number[], candles: Candle[]) {
   return points
 }
 
-export function PriceChart({ candles, liveCandle, symbol, timeframe, theme, showEma, showVolume, showBollinger, showVwap, showSar, fastEma, slowEma, bbPeriod, bbStd, loading }: PriceChartProps) {
+export function PriceChart({ candles, liveCandle, symbol, timeframe, marketMode, theme, showEma, showVolume, showBollinger, showVwap, showSar, fastEma, slowEma, bbPeriod, bbStd, loading, orderflowOverlay, onChartReady }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+  const depthPrimitiveRef = useRef<DepthPrimitive | null>(null)
+  const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
+  const orderflowRefreshRef = useRef<() => void>(() => undefined)
+  const chartCandlesRef = useRef<readonly Candle[]>(candles)
+  const symbolRef = useRef(symbol)
+  const timeframeRef = useRef(timeframe)
+  const marketModeRef = useRef(marketMode)
+  const overlayOptionsRef = useRef(orderflowOverlay)
+  const onChartReadyRef = useRef(onChartReady)
   const fastSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const slowSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const bbUpperRef = useRef<ISeriesApi<'Line'> | null>(null)
@@ -71,6 +94,20 @@ export function PriceChart({ candles, liveCandle, symbol, timeframe, theme, show
   const sarSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const fittedKeyRef = useRef('')
   const [paused, setPaused] = useState(false)
+  const chartCandles = useMemo(() => {
+    if (!liveCandle) return candles
+    const lastCandle = candles.at(-1)
+    return lastCandle?.time === liveCandle.time
+      ? [...candles.slice(0, -1), liveCandle]
+      : [...candles, liveCandle]
+  }, [candles, liveCandle])
+
+  chartCandlesRef.current = chartCandles
+  symbolRef.current = symbol
+  timeframeRef.current = timeframe
+  marketModeRef.current = marketMode
+  overlayOptionsRef.current = orderflowOverlay
+  onChartReadyRef.current = onChartReady
 
   useEffect(() => {
     const element = containerRef.current
@@ -142,14 +179,53 @@ export function PriceChart({ candles, liveCandle, symbol, timeframe, theme, show
     vwapSeriesRef.current = vwapIndicator
     sarSeriesRef.current = sarIndicator
 
+    const depthPrimitive = new DepthPrimitive({ ...overlayOptionsRef.current, theme })
+    candleSeries.attachPrimitive(depthPrimitive)
+    const markersPlugin = createSeriesMarkers(candleSeries, [], { autoScale: false, zOrder: 'aboveSeries' })
+    depthPrimitiveRef.current = depthPrimitive
+    markersPluginRef.current = markersPlugin
+    depthPrimitive.setCandles(chartCandlesRef.current)
+
+    let markerSignature = ''
+    const refreshOrderflow = () => {
+      const rawState = orderflowStore.getRawState()
+      const matchesMarket = rawState.symbol === symbolRef.current
+        && rawState.timeframe === timeframeRef.current
+        && rawState.mode === marketModeRef.current
+      const visibleState = matchesMarket ? rawState : null
+      depthPrimitive.setRawState(visibleState)
+      const events = visibleState?.events.toArray() ?? []
+      const markers = flowEventsToMarkers(
+        marketModeRef.current === 'futures' ? events : events.filter((event) => event.type !== 'LIQUIDATION'),
+        chartCandlesRef.current,
+        timeframeRef.current,
+      )
+      const nextSignature = markers.map((marker) => `${marker.id}:${marker.time}`).join('|')
+      if (nextSignature !== markerSignature) {
+        markersPlugin.setMarkers(markers)
+        markerSignature = nextSignature
+      }
+    }
+    orderflowRefreshRef.current = refreshOrderflow
+    const unsubscribeOrderflow = orderflowStore.subscribeRaw(refreshOrderflow)
+    refreshOrderflow()
+
     const observer = new ResizeObserver((entries) => {
       const rect = entries[0]?.contentRect
       if (rect && rect.width > 0 && rect.height > 0) chart.applyOptions({ width: Math.floor(rect.width), height: Math.floor(rect.height) })
     })
     observer.observe(element)
+    onChartReadyRef.current?.({ chart, candleSeries, volumeSeries })
 
     return () => {
       observer.disconnect()
+      unsubscribeOrderflow()
+      orderflowRefreshRef.current = () => undefined
+      candleSeries.detachPrimitive(depthPrimitive)
+      markersPlugin.detach()
+      if (depthPrimitiveRef.current === depthPrimitive) depthPrimitiveRef.current = null
+      if (markersPluginRef.current === markersPlugin) markersPluginRef.current = null
+      onChartReadyRef.current?.(null)
       chart.remove()
       chartRef.current = null
       candleSeriesRef.current = null
@@ -172,7 +248,12 @@ export function PriceChart({ candles, liveCandle, symbol, timeframe, theme, show
       rightPriceScale: { borderColor: colors.border },
       timeScale: { borderColor: colors.border },
     })
+    depthPrimitiveRef.current?.setOptions({ theme })
   }, [theme])
+
+  useEffect(() => {
+    if (orderflowOverlay) depthPrimitiveRef.current?.setOptions({ ...orderflowOverlay, theme })
+  }, [orderflowOverlay, theme])
 
   useEffect(() => {
     const candleSeries = candleSeriesRef.current
@@ -237,6 +318,11 @@ export function PriceChart({ candles, liveCandle, symbol, timeframe, theme, show
     updateLine(vwapSeriesRef.current, vwap(combined).at(-1))
     updateLine(sarSeriesRef.current, parabolicSar(combined).at(-1))
   }, [liveCandle, paused, candles, fastEma, slowEma, bbPeriod, bbStd])
+
+  useEffect(() => {
+    depthPrimitiveRef.current?.setCandles(chartCandles)
+    orderflowRefreshRef.current()
+  }, [chartCandles, symbol, timeframe, marketMode])
 
   useEffect(() => {
     const visible = showEma && candles.length > 0
