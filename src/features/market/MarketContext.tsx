@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { readStorage, writeStorage } from '@/lib/storage'
-import { useDepthBook } from './useDepthBook'
+import { orderflowStore } from '@/features/orderflow/orderflowStore'
+import { useDepthBook, type DepthBookEvent } from './useDepthBook'
 import {
   discoverProvider,
   discoverSpotProvider,
@@ -116,7 +117,38 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   const previousOiRef = useRef<number | null>(null)
   const lastUiUpdateRef = useRef(0)
   const lastTradeQuoteAtRef = useRef(0)
-  const depthBook = useDepthBook(symbol, mode, mode !== 'offline' && symbols.some((item) => item.symbol === symbol))
+  const orderflowGenerationRef = useRef(0)
+  const orderflowSessionKey = `${symbol}|${mode}|${timeframe}`
+
+  useEffect(() => {
+    orderflowGenerationRef.current = orderflowStore.reset(symbol, mode, timeframe)
+  }, [mode, symbol, timeframe])
+
+  useEffect(() => {
+    const selected = symbols.find((item) => item.symbol === symbol)
+    if (selected) orderflowStore.setTickSize(symbol, orderflowGenerationRef.current, selected.tickSize)
+  }, [mode, symbol, symbols, timeframe])
+
+  const onDepthBookEvent = useCallback((event: DepthBookEvent) => {
+    const generation = orderflowGenerationRef.current
+    if (!orderflowStore.isCurrentSession(orderflowSessionKey)
+      || !orderflowStore.isCurrentMarket(symbol, mode, generation)) return
+
+    if (event.type === 'status') {
+      orderflowStore.setDepthStatus(symbol, generation, event)
+    } else if (event.type === 'snapshot') {
+      orderflowStore.ingestDepthSnapshot(symbol, generation, event)
+    } else {
+      orderflowStore.ingestDepthDiff(symbol, generation, event)
+    }
+  }, [mode, orderflowSessionKey, symbol])
+
+  const depthBook = useDepthBook(
+    symbol,
+    mode,
+    mode !== 'offline' && symbols.some((item) => item.symbol === symbol),
+    onDepthBookEvent,
+  )
 
   modeRef.current = mode
   symbolRef.current = symbol
@@ -261,9 +293,12 @@ export function MarketProvider({ children }: { children: ReactNode }) {
     let fallbackStarted = false
     const targetSymbol = symbol
     const targetMode = mode
+    const generation = orderflowGenerationRef.current
+
+    const isCurrent = () => orderflowStore.isCurrentMarket(targetSymbol, targetMode, generation)
 
     const connect = () => {
-      if (!active) return
+      if (!active || !isCurrent()) return
       setConnection(retry === 0 ? 'connecting' : 'reconnecting')
       try {
         socket = new WebSocket(wsUrl(targetMode, targetSymbol, timeframe))
@@ -272,18 +307,19 @@ export function MarketProvider({ children }: { children: ReactNode }) {
         return
       }
       socket.onopen = () => {
-        if (!active) return
+        if (!active || !isCurrent()) return
         retry = 0
         setConnection('live')
         setError(null)
       }
       socket.onmessage = (event) => {
-        if (!active) return
+        if (!active || !isCurrent()) return
         let packet: Record<string, unknown>
         try { packet = JSON.parse(String(event.data)) as Record<string, unknown> } catch { return }
         const message = (packet.data && typeof packet.data === 'object' ? packet.data : packet) as Record<string, unknown>
         const eventType = String(message.e ?? '')
         const now = Date.now()
+        orderflowStore.ingestWsMessage(targetSymbol, generation, now)
         const previous = lastUiUpdateRef.current
         if (now - previous > 700) {
           lastUiUpdateRef.current = now
@@ -307,7 +343,9 @@ export function MarketProvider({ children }: { children: ReactNode }) {
           if (price > 0 && quantity > 0) {
             const side = message.m ? 'sell' : 'buy'
             const notional = price * quantity
-            const timestamp = Number(message.T ?? now)
+            const exchangeTimestamp = Number(message.T ?? now)
+            const timestamp = Number.isFinite(exchangeTimestamp) && exchangeTimestamp > 0 ? exchangeTimestamp : now
+            orderflowStore.ingestTrade(targetSymbol, generation, { ts: timestamp, price, notional, side })
             tradesRef.current.push({ timestamp, notional, side, price })
             tradesRef.current = tradesRef.current.filter((trade) => now - trade.timestamp <= 65_000).slice(-3000)
             const largeThreshold = 100_000
@@ -332,10 +370,19 @@ export function MarketProvider({ children }: { children: ReactNode }) {
         }
 
         if (eventType === 'markPriceUpdate') {
+          const markPrice = Number(message.p)
+          const fundingRate = Number(message.r)
+          orderflowStore.ingestMark(
+            targetSymbol,
+            generation,
+            Number.isFinite(markPrice) ? markPrice : null,
+            Number.isFinite(fundingRate) ? fundingRate : null,
+            now,
+          )
           setQuote((current) => ({
             ...current,
-            markPrice: Number(message.p),
-            fundingRate: Number(message.r),
+            markPrice,
+            fundingRate,
             updatedAt: now,
           }))
           return
@@ -346,8 +393,16 @@ export function MarketProvider({ children }: { children: ReactNode }) {
           const price = Number(order?.ap ?? order?.p ?? 0)
           const quantity = Number(order?.q ?? 0)
           if (price > 0 && quantity > 0) {
-            const timestamp = Number(order?.T ?? now)
+            const exchangeTimestamp = Number(order?.T ?? now)
+            const timestamp = Number.isFinite(exchangeTimestamp) && exchangeTimestamp > 0 ? exchangeTimestamp : now
             const notional = price * quantity
+            const liquidationSide = String(order?.S ?? '').toUpperCase() === 'BUY' ? 'short' : 'long'
+            orderflowStore.ingestLiquidation(targetSymbol, generation, {
+              ts: timestamp,
+              price,
+              notional,
+              side: liquidationSide,
+            })
             liquidationsRef.current.push({ timestamp, notional })
             liquidationsRef.current = liquidationsRef.current.filter((item) => now - item.timestamp <= 65_000).slice(-400)
             const item: FlowEvent = {
@@ -380,21 +435,21 @@ export function MarketProvider({ children }: { children: ReactNode }) {
         }
       }
       socket.onerror = () => {
-        if (active) setConnection('reconnecting')
+        if (active && isCurrent()) setConnection('reconnecting')
       }
       socket.onclose = () => {
-        if (active) scheduleReconnect()
+        if (active && isCurrent()) scheduleReconnect()
       }
     }
 
     const scheduleReconnect = () => {
-      if (!active) return
+      if (!active || !isCurrent()) return
       retry += 1
       setConnection('reconnecting')
       if (targetMode === 'futures' && retry >= 3 && !fallbackStarted) {
         fallbackStarted = true
         discoverSpotProvider().then((fallback) => {
-          if (!active) return
+          if (!active || !isCurrent()) return
           modeRef.current = fallback.mode
           setMode(fallback.mode)
           setModeReason(`Futures WebSocket bağlantısı kurulamadı. ${fallback.reason}`)
@@ -423,6 +478,7 @@ export function MarketProvider({ children }: { children: ReactNode }) {
     if (mode === 'offline' || !symbols.some((item) => item.symbol === symbol)) return
     let active = true
     const controller = new AbortController()
+    const generation = orderflowGenerationRef.current
     const update = async () => {
       const quotePromise = fetchTicker24h(symbol, mode, controller.signal)
       const fundingPromise = mode === 'futures' ? fetchFunding(symbol, controller.signal) : Promise.resolve(null)
@@ -430,9 +486,17 @@ export function MarketProvider({ children }: { children: ReactNode }) {
       const [tickerResult, fundingResult, oiResult] = await Promise.allSettled([
         quotePromise, fundingPromise, oiPromise,
       ])
-      if (!active) return
+      if (!active || !orderflowStore.isCurrentMarket(symbol, mode, generation)) return
+      const updatedAt = Date.now()
       if (tickerResult.status === 'fulfilled') setQuote((current) => ({ ...current, ...tickerResult.value }))
       if (fundingResult.status === 'fulfilled' && fundingResult.value) {
+        orderflowStore.ingestMark(
+          symbol,
+          generation,
+          fundingResult.value.markPrice,
+          fundingResult.value.fundingRate,
+          updatedAt,
+        )
         setQuote((current) => ({ ...current, ...fundingResult.value }))
       }
       if (oiResult.status === 'fulfilled' && oiResult.value != null) {
@@ -440,13 +504,14 @@ export function MarketProvider({ children }: { children: ReactNode }) {
         const previous = previousOiRef.current
         const change = previous && previous > 0 ? ((currentOi / previous) - 1) * 100 : null
         previousOiRef.current = currentOi
+        orderflowStore.ingestOpenInterest(symbol, generation, currentOi, change, updatedAt)
         setQuote((current) => ({ ...current, openInterest: currentOi, openInterestChange: change }))
       }
     }
     void update()
     const timer = window.setInterval(() => { void update() }, 20_000)
     return () => { active = false; controller.abort(); window.clearInterval(timer) }
-  }, [mode, symbol, symbols, discoveryNonce])
+  }, [mode, symbol, symbols, timeframe, discoveryNonce])
 
   // The dedicated hook owns REST snapshot seeding, diff sequencing and reconnects.
   useEffect(() => {

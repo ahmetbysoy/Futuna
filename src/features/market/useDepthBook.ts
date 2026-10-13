@@ -7,9 +7,27 @@ interface DepthUpdate {
   U: number
   u: number
   pu?: number
-  b: [string, string][]
-  a: [string, string][]
+  b: [number, number][]
+  a: [number, number][]
 }
+
+export type DepthBookEvent =
+  | { type: 'status'; status: DepthSyncStatus; updatedAt: number | null; clearBook?: boolean }
+  | {
+      type: 'snapshot'
+      bids: ReadonlyMap<number, number>
+      asks: ReadonlyMap<number, number>
+      lastUpdateId: number
+      status: 'syncing' | 'live'
+      updatedAt: number
+    }
+  | {
+      type: 'diff'
+      bids: readonly [number, number][]
+      asks: readonly [number, number][]
+      lastUpdateId: number
+      updatedAt: number
+    }
 
 export interface DepthBookState {
   bids: DepthLevel[]
@@ -40,13 +58,21 @@ function depthWsUrl(mode: Exclude<MarketMode, 'offline'>, symbol: string) {
 }
 
 /** Maintain a Binance local order book using a REST seed and sequence-checked
- * diff-depth events. A REST-only view remains available while the stream syncs. */
-export function useDepthBook(symbol: string, mode: MarketMode, enabled: boolean): DepthBookState {
+ * diff-depth events. A REST-only view remains available while the stream syncs.
+ * The optional callback receives full numeric-key depth without changing the
+ * existing throttled top-20 React publication used by the Order Book panel. */
+export function useDepthBook(
+  symbol: string,
+  mode: MarketMode,
+  enabled: boolean,
+  onBookEvent?: (event: DepthBookEvent) => void,
+): DepthBookState {
   const [depth, setDepth] = useState<DepthBookState>(EMPTY_DEPTH)
 
   useEffect(() => {
     if (!enabled || mode === 'offline') {
       setDepth({ ...EMPTY_DEPTH, depthStatus: 'offline' })
+      onBookEvent?.({ type: 'status', status: 'offline', updatedAt: null, clearBook: true })
       return
     }
 
@@ -63,18 +89,32 @@ export function useDepthBook(symbol: string, mode: MarketMode, enabled: boolean)
     let snapshotBaseId: number | null = null
     let lastUpdateId = 0
     let pending: DepthUpdate[] = []
-    let bids = new Map<string, number>()
-    let asks = new Map<string, number>()
+    let bids = new Map<number, number>()
+    let asks = new Map<number, number>()
     const controller = new AbortController()
     const maxBufferedUpdates = 2_500
 
-    setDepth({ ...EMPTY_DEPTH, depthStatus: 'connecting' })
+    const notifyStatus = (status: DepthSyncStatus, updatedAt: number | null = null, clearBook = false) => {
+      if (active) onBookEvent?.({ type: 'status', status, updatedAt, clearBook })
+    }
 
-    const levelsFor = (side: Map<string, number>, descending: boolean): DepthLevel[] =>
-      Array.from(side, ([priceText, quantity]) => {
-        const price = Number(priceText)
-        return { price, quantity, notional: price * quantity }
+    const notifySnapshot = (status: 'syncing' | 'live', updatedAt: number) => {
+      if (!active) return
+      onBookEvent?.({
+        type: 'snapshot',
+        bids: new Map(bids),
+        asks: new Map(asks),
+        lastUpdateId,
+        status,
+        updatedAt,
       })
+    }
+
+    setDepth({ ...EMPTY_DEPTH, depthStatus: 'connecting' })
+    notifyStatus('connecting', null, true)
+
+    const levelsFor = (side: Map<number, number>, descending: boolean): DepthLevel[] =>
+      Array.from(side, ([price, quantity]) => ({ price, quantity, notional: price * quantity }))
         .filter((level) => Number.isFinite(level.price) && level.price > 0 && level.quantity > 0)
         .sort((left, right) => descending ? right.price - left.price : left.price - right.price)
 
@@ -107,20 +147,17 @@ export function useDepthBook(symbol: string, mode: MarketMode, enabled: boolean)
       }, 400)
     }
 
-    const applySide = (book: Map<string, number>, updates: [string, string][]) => {
-      for (const [priceText, quantityText] of updates) {
-        const price = Number(priceText)
-        const quantity = Number(quantityText)
+    const applySide = (book: Map<number, number>, updates: [number, number][]) => {
+      for (const [price, quantity] of updates) {
         if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(quantity) || quantity < 0) continue
-        const key = String(price)
-        if (quantity === 0) book.delete(key)
-        else book.set(key, quantity)
+        if (quantity === 0) book.delete(price)
+        else book.set(price, quantity)
       }
       if (book.size > 1_500) {
         const descending = book === bids
         const keep = levelsFor(book, descending).slice(0, 1_000)
         book.clear()
-        for (const level of keep) book.set(String(level.price), level.quantity)
+        for (const level of keep) book.set(level.price, level.quantity)
       }
     }
 
@@ -131,6 +168,7 @@ export function useDepthBook(symbol: string, mode: MarketMode, enabled: boolean)
       if (publishTimer) window.clearTimeout(publishTimer)
       publishTimer = 0
       setDepth({ ...EMPTY_DEPTH, depthStatus: 'syncing' })
+      notifyStatus('syncing', null, true)
     }
 
     const refreshRestFallback = async () => {
@@ -149,8 +187,12 @@ export function useDepthBook(symbol: string, mode: MarketMode, enabled: boolean)
           depthUpdatedAt: snapshot.updatedAt,
           depthStatus: 'rest-fallback',
         })
+        notifyStatus('rest-fallback', snapshot.updatedAt, true)
       } catch {
-        if (active && !synced) setDepth((current) => ({ ...current, depthStatus: 'unavailable' }))
+        if (active && !synced) {
+          setDepth((current) => ({ ...current, depthStatus: 'unavailable' }))
+          notifyStatus('unavailable', Date.now(), true)
+        }
       }
     }
 
@@ -210,6 +252,8 @@ export function useDepthBook(symbol: string, mode: MarketMode, enabled: boolean)
       lastUpdateId = cursor
       snapshotBaseId = null
       synced = true
+      const updatedAt = Date.now()
+      notifySnapshot('live', updatedAt)
       commitDepth('live')
     }
 
@@ -219,13 +263,15 @@ export function useDepthBook(symbol: string, mode: MarketMode, enabled: boolean)
       synced = false
       snapshotBaseId = null
       setDepth((current) => ({ ...current, depthStatus: 'syncing' }))
+      notifyStatus('syncing')
       try {
         const snapshot = await fetchDepthSnapshot(symbol, mode, controller.signal, 1_000)
         if (!active) return
-        bids = new Map(snapshot.bids.filter((level) => level.quantity > 0).map((level) => [String(level.price), level.quantity]))
-        asks = new Map(snapshot.asks.filter((level) => level.quantity > 0).map((level) => [String(level.price), level.quantity]))
+        bids = new Map(snapshot.bids.filter((level) => level.quantity > 0).map((level) => [level.price, level.quantity]))
+        asks = new Map(snapshot.asks.filter((level) => level.quantity > 0).map((level) => [level.price, level.quantity]))
         lastUpdateId = snapshot.lastUpdateId
         snapshotBaseId = snapshot.lastUpdateId
+        notifySnapshot('syncing', snapshot.updatedAt)
         commitDepth('syncing')
       } catch {
         if (active) {
@@ -250,12 +296,12 @@ export function useDepthBook(symbol: string, mode: MarketMode, enabled: boolean)
         const U = Number(wire.U)
         const u = Number(wire.u)
         const pu = wire.pu == null ? undefined : Number(wire.pu)
-        const toRows = (value: unknown): [string, string][] | null => {
+        const toRows = (value: unknown): [number, number][] | null => {
           if (!Array.isArray(value)) return null
-          const rows: [string, string][] = []
+          const rows: [number, number][] = []
           for (const row of value) {
             if (!Array.isArray(row) || row.length < 2) return null
-            rows.push([String(row[0]), String(row[1])])
+            rows.push([Number(row[0]), Number(row[1])])
           }
           return rows
         }
@@ -288,6 +334,14 @@ export function useDepthBook(symbol: string, mode: MarketMode, enabled: boolean)
       applySide(bids, update.b)
       applySide(asks, update.a)
       lastUpdateId = update.u
+      const updatedAt = Date.now()
+      onBookEvent?.({
+        type: 'diff',
+        bids: update.b,
+        asks: update.a,
+        lastUpdateId,
+        updatedAt,
+      })
       scheduleDepthPublish()
     }
 
@@ -304,6 +358,7 @@ export function useDepthBook(symbol: string, mode: MarketMode, enabled: boolean)
     const connect = () => {
       if (!active) return
       setDepth((current) => ({ ...current, depthStatus: 'connecting' }))
+      notifyStatus('connecting', null, true)
       try {
         socket = new WebSocket(depthWsUrl(mode, symbol))
       } catch {
@@ -318,6 +373,7 @@ export function useDepthBook(symbol: string, mode: MarketMode, enabled: boolean)
         retry = 0
         pending = []
         setDepth((current) => ({ ...current, depthStatus: 'syncing' }))
+        notifyStatus('syncing')
         if (snapshotRetryTimer) window.clearTimeout(snapshotRetryTimer)
         snapshotRetryTimer = 0
         void loadSnapshot()
@@ -338,6 +394,7 @@ export function useDepthBook(symbol: string, mode: MarketMode, enabled: boolean)
         if (snapshotRetryTimer) window.clearTimeout(snapshotRetryTimer)
         snapshotRetryTimer = 0
         setDepth((current) => ({ ...current, depthStatus: 'connecting' }))
+        notifyStatus('connecting', null, true)
         void refreshRestFallback()
         scheduleReconnect()
       }
@@ -357,7 +414,7 @@ export function useDepthBook(symbol: string, mode: MarketMode, enabled: boolean)
       window.clearInterval(fallbackTimer)
       if (socket && socket.readyState < WebSocket.CLOSING) socket.close(1000, 'symbol or market mode changed')
     }
-  }, [enabled, mode, symbol])
+  }, [enabled, mode, symbol, onBookEvent])
 
   return depth
 }
