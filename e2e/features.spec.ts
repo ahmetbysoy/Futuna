@@ -25,6 +25,36 @@ test('connection state is labeled and alert preferences are interactive', async 
   await expect(alertsEnabled).toBeChecked()
 })
 
+test('orderflow presets and symbol thresholds persist locally', async ({ page }) => {
+  await openSettings(page)
+  await page.locator('.settings-section').filter({ hasText: 'Emir akışı ve mikro yapı' }).locator('summary').click()
+  const scalpingPreset = page.getByRole('button', { name: 'Scalping', exact: true })
+  await scalpingPreset.click()
+  await expect(scalpingPreset).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByLabel('DOM konumu')).toHaveValue('both')
+  await expect.poll(() => page.evaluate(() => {
+    const settings = JSON.parse(localStorage.getItem('fs.settings.v2') ?? '{}')
+    return settings.orderflow?.presetId
+  })).toBe('scalping')
+
+  await page.reload()
+  await openSettings(page)
+  await page.locator('.settings-section').filter({ hasText: 'Emir akışı ve mikro yapı' }).locator('summary').click()
+  await expect(page.getByRole('button', { name: 'Scalping', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByLabel('DOM konumu')).toHaveValue('both')
+
+  const symbolThreshold = page.getByLabel('BTCUSDT taban eşiği')
+  await symbolThreshold.fill('500000')
+  await expect.poll(() => page.evaluate(() => {
+    const settings = JSON.parse(localStorage.getItem('fs.settings.v2') ?? '{}')
+    return settings.orderflow?.whaleMinBySymbol?.BTCUSDT
+  })).toBe(500_000)
+  await page.reload()
+  await openSettings(page)
+  await page.locator('.settings-section').filter({ hasText: 'Emir akışı ve mikro yapı' }).locator('summary').click()
+  await expect(page.getByLabel('BTCUSDT taban eşiği')).toHaveValue('500000')
+})
+
 test('session recorder starts, stops, and exports JSON', async ({ page }) => {
   await openSettings(page)
   await page.getByLabel('İndirme biçimi').selectOption('json')

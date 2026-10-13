@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { ArrowsClockwise, ArrowDownRight, ArrowUpRight, ChartLineUp } from '@phosphor-icons/react'
 import { useApp } from '@/app/AppContext'
 import { Badge } from '@/components/ui/Badge'
@@ -17,6 +18,22 @@ export function PriceChartPanel() {
   const active = candles.at(-1)
   const displayPrice = quote.lastPrice ?? liveCandle?.close ?? active?.close ?? null
   const base = symbol.replace('USDT', '')
+  const orderflowOverlay = useMemo(() => ({
+    showHeatmap: settings.orderflow.showHeatmap,
+    showLadder: settings.orderflow.showLadder,
+    showWallRays: settings.orderflow.showWallRays,
+    showLiveWalls: settings.orderflow.showLiveWalls,
+    ladderSide: settings.orderflow.ladderSide,
+    ladderWidth: settings.orderflow.ladderWidth,
+    wallRayLen: settings.orderflow.wallRayLen,
+    wallOpacity: settings.orderflow.wallOpacity,
+    wallLabels: settings.orderflow.wallLabels,
+    wallEstOnly: settings.orderflow.wallEstOnly,
+    wallPct: settings.orderflow.wallPct,
+    liveWallPulse: settings.orderflow.liveWallPulse,
+    liveWallFlash: settings.orderflow.liveWallFlash,
+    liveWallLabels: settings.orderflow.liveWallLabels,
+  }), [settings.orderflow])
 
   return (
     <Card className="chart-card">
@@ -80,6 +97,7 @@ export function PriceChartPanel() {
           bbPeriod={settings.bbPeriod}
           bbStd={settings.bbStd}
           loading={loadingCandles}
+          orderflowOverlay={orderflowOverlay}
         />
       ) : (
         <div className="chart-loading" role="status">

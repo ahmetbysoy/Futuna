@@ -141,6 +141,17 @@ export interface DetectorConfig {
   compassWallTick: number
 }
 
+export interface OrderflowCalibration {
+  warm: boolean
+  samples: number
+  threshold: number
+  wallMin: number
+  bigWhale: number
+  p50: number | null
+  p80: number | null
+  p95: number | null
+}
+
 export interface OrderflowSnapshot {
   readonly symbol: string
   readonly mode: MarketMode
@@ -173,5 +184,6 @@ export interface OrderflowSnapshot {
   readonly events: readonly FlowEventRecord[]
   readonly walls: readonly WallRecord[]
   readonly compass: CompassState
+  readonly calibration: OrderflowCalibration
   readonly heatFrameCount: number
 }

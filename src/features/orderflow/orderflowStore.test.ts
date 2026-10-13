@@ -127,6 +127,30 @@ describe('OrderflowStore', () => {
     expect(store.getSnapshot().heatFrameCount).toBe(900)
   })
 
+  it('publishes a bounded per-symbol calibration snapshot', () => {
+    vi.useFakeTimers()
+    const store = new OrderflowStore(clock)
+    store.reset('BTCUSDT', 'futures', '1m')
+    const snapshot = store.getSnapshot()
+    const calibration = {
+      warm: true,
+      samples: 42,
+      threshold: 275_000,
+      wallMin: 18_000,
+      bigWhale: 400_000,
+      p50: 22_000,
+      p80: 275_000,
+      p95: 400_000,
+    }
+    store.setComputedMetrics(snapshot.cvd, snapshot.obi, snapshot.compass, calibration)
+    calibration.threshold = 1
+    vi.advanceTimersByTime(100)
+
+    expect(store.getSnapshot().calibration.threshold).toBe(275_000)
+    expect(store.getSnapshot().calibration.samples).toBe(42)
+    expect(store.getSnapshot().calibration.p80).toBe(275_000)
+  })
+
   it('keeps futures-only fields unavailable in spot fallback', () => {
     vi.useFakeTimers()
     const store = new OrderflowStore(clock)

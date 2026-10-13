@@ -10,6 +10,7 @@ import type {
   HeatFrame,
   LiquidationRecord,
   ObiSnapshot,
+  OrderflowCalibration,
   OrderflowSide,
   OrderflowSnapshot,
   OrderflowTrade,
@@ -138,6 +139,7 @@ interface MutableOrderflowState {
   cvd: CvdMomentum
   obi: ObiSnapshot
   compass: CompassState
+  calibration: OrderflowCalibration
   depthActivity: OrderflowDepthActivity | null
   eventSequence: number
 }
@@ -300,6 +302,16 @@ function createState(symbol: string, mode: MarketMode, timeframe: Timeframe, gen
     cvd: emptyCvd(),
     obi: emptyObi(),
     compass: emptyCompass(),
+    calibration: {
+      warm: false,
+      samples: 0,
+      threshold: 300_000,
+      wallMin: 24_000,
+      bigWhale: 600_000,
+      p50: null,
+      p80: null,
+      p95: null,
+    },
     depthActivity: null,
     eventSequence: 0,
   }
@@ -515,12 +527,13 @@ export class OrderflowStore {
     this.changed()
   }
 
-  setComputedMetrics(cvd: CvdMomentum, obi: ObiSnapshot, compass?: CompassState) {
+  setComputedMetrics(cvd: CvdMomentum, obi: ObiSnapshot, compass?: CompassState, calibration?: OrderflowCalibration) {
     this.state.cvd = { ...cvd }
     this.state.obi = { ...obi }
     if (compass) {
       this.state.compass = { ...compass, components: { ...compass.components } }
     }
+    if (calibration) this.state.calibration = { ...calibration }
     this.changed()
   }
 
@@ -709,6 +722,7 @@ export class OrderflowStore {
       events,
       walls,
       compass,
+      calibration: { ...state.calibration },
       heatFrameCount: state.heatFrames.length,
     }
     this.lastSnapshotAt = this.clock.now()

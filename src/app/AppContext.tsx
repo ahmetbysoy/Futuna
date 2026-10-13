@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { readStorage, writeStorage } from '@/lib/storage'
+import { DEFAULT_ORDERFLOW_SETTINGS, normalizeOrderflowSettings, type OrderflowSettings } from '@/features/orderflow/settings'
 
 export type ViewId = 'dashboard' | 'signals' | 'scanner' | 'pool' | 'backtest' | 'favorites' | 'settings'
 export type ThemeMode = 'dark' | 'light'
@@ -35,6 +36,7 @@ export interface AppSettings {
   alertOnLimit: boolean
   scannerLimit: 20 | 50
   sessionMaxMinutes: number
+  orderflow: OrderflowSettings
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -67,6 +69,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   alertOnLimit: true,
   scannerLimit: 20,
   sessionMaxMinutes: 15,
+  orderflow: DEFAULT_ORDERFLOW_SETTINGS,
 }
 
 export interface ToastMessage {
@@ -86,6 +89,7 @@ interface AppContextValue {
   setTheme: (theme: ThemeMode) => void
   toggleTheme: () => void
   updateSettings: (changes: Partial<AppSettings>) => void
+  updateOrderflowSettings: (changes: Partial<OrderflowSettings>) => void
   resetSettings: () => void
   toggleFavorite: (symbol: string) => void
   isFavorite: (symbol: string) => boolean
@@ -104,8 +108,12 @@ function getInitialTheme(): ThemeMode {
 }
 
 function getInitialSettings(): AppSettings {
-  const saved = readStorage<Partial<AppSettings>>('fs.settings.v2', {})
-  return { ...DEFAULT_SETTINGS, ...saved }
+  const saved = readStorage<Partial<AppSettings> | null>('fs.settings.v2', {}) ?? {}
+  return {
+    ...DEFAULT_SETTINGS,
+    ...saved,
+    orderflow: normalizeOrderflowSettings(saved.orderflow),
+  }
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -129,6 +137,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const toggleTheme = useCallback(() => setThemeState((value) => value === 'dark' ? 'light' : 'dark'), [])
   const updateSettings = useCallback((changes: Partial<AppSettings>) => {
     setSettings((current) => ({ ...current, ...changes }))
+  }, [])
+  const updateOrderflowSettings = useCallback((changes: Partial<OrderflowSettings>) => {
+    setSettings((current) => ({
+      ...current,
+      orderflow: normalizeOrderflowSettings({
+        ...current.orderflow,
+        ...changes,
+        presetId: changes.presetId ?? 'custom',
+      }),
+    }))
   }, [])
   const resetSettings = useCallback(() => setSettings(DEFAULT_SETTINGS), [])
   const toggleFavorite = useCallback((symbol: string) => {
@@ -160,13 +178,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTheme,
     toggleTheme,
     updateSettings,
+    updateOrderflowSettings,
     resetSettings,
     toggleFavorite,
     isFavorite,
     addRecent,
     showToast,
     dismissToast,
-  }), [activeView, theme, settings, favorites, recentSymbols, toasts, setTheme, toggleTheme, updateSettings, resetSettings, toggleFavorite, isFavorite, addRecent, showToast, dismissToast])
+  }), [activeView, theme, settings, favorites, recentSymbols, toasts, setTheme, toggleTheme, updateSettings, updateOrderflowSettings, resetSettings, toggleFavorite, isFavorite, addRecent, showToast, dismissToast])
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }

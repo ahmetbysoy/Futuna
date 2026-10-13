@@ -628,6 +628,26 @@ kbd { display: inline-grid; min-width: 19px; height: 19px; place-items: center; 
 .settings-info-note > svg { color: var(--blue); }
 .settings-info-note--warning { border-color: color-mix(in srgb, var(--warning) 27%, var(--border-soft)); background: color-mix(in srgb, var(--warning) 5%, var(--surface)); }
 .settings-info-note--warning > svg { color: var(--warning); }
+.orderflow-preset-area { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border-soft); }
+.orderflow-preset-area > div:first-child { display: grid; gap: 3px; min-width: 0; }
+.orderflow-preset-area strong, .orderflow-setting-group > strong { color: var(--text-secondary); font-size: 10px; font-weight: 650; }
+.orderflow-preset-area small { max-width: 560px; color: var(--muted); font-size: 9px; line-height: 1.45; }
+.orderflow-preset-state { color: var(--accent); font-size: 8px; font-weight: 620; }
+.orderflow-presets { display: flex; flex: none; flex-wrap: wrap; gap: 6px; }
+.orderflow-calibration-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(230px, .55fr); align-items: center; gap: 12px; margin-top: 12px; }
+.orderflow-calibration-row > div:first-child { display: grid; gap: 3px; }
+.orderflow-calibration-row > div:first-child strong { color: var(--text-secondary); font-size: 10px; }
+.orderflow-calibration-row > div:first-child small { color: var(--muted); font-size: 9px; }
+.orderflow-calibration-status { display: grid; gap: 5px; min-width: 0; padding: 9px 10px; border: 1px solid var(--border-soft); border-radius: 9px; background: var(--surface-input); }
+.orderflow-calibration-status > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.orderflow-calibration-status > div:first-child span, .orderflow-calibration-status > small { color: var(--muted); font-size: 8px; }
+.orderflow-calibration-status > div:first-child strong { color: var(--text); font-size: 11px; }
+.orderflow-calibration-progress { height: 4px; overflow: hidden; border-radius: 99px; background: var(--border-soft); }
+.orderflow-calibration-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--accent-strong); transition: width .18s ease; }
+.orderflow-setting-group { display: grid; margin-top: 13px; }
+.orderflow-setting-group > strong { padding-bottom: 4px; }
+.orderflow-setting-group .settings-number-grid { padding-top: 9px; }
+.orderflow-opacity-setting .range-control { width: 100%; max-width: 230px; }
 .range-control { display: flex; align-items: center; gap: 8px; width: min(240px, 40%); }
 .range-control input { flex: 1; min-width: 60px; accent-color: var(--accent-strong); }
 .range-control output { min-width: 34px; color: var(--text-secondary); font-family: 'Geist Mono', monospace; font-size: 9px; text-align: right; }
@@ -852,6 +872,11 @@ kbd { display: inline-grid; min-width: 19px; height: 19px; place-items: center; 
   .settings-row { gap: 9px; padding: 10px 0; }
   .settings-row small { font-size: 8px; }
   .settings-status { flex-wrap: wrap; justify-content: flex-end; }
+  .orderflow-preset-area { align-items: stretch; flex-direction: column; gap: 9px; }
+  .orderflow-presets { width: 100%; }
+  .orderflow-presets .ui-button { flex: 1; }
+  .orderflow-calibration-row { grid-template-columns: 1fr; gap: 8px; }
+  .orderflow-opacity-setting .range-control { max-width: none; }
   .daily-loss-tracker__actions { flex-wrap: wrap; }
   .daily-loss-tracker__actions input { flex: 1 1 100px; width: auto; }
   .session-controls { align-items: stretch; }

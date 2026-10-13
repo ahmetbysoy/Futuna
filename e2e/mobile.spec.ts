@@ -62,6 +62,13 @@ test('mobile settings can enable alerts and manage a local session', async ({ pa
   await sheet.getByRole('button', { name: 'Ayarlar', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Ayarlar' })).toBeVisible()
 
+  const orderflowSection = page.locator('.settings-section').filter({ hasText: 'Emir akışı ve mikro yapı' })
+  await orderflowSection.locator('summary').click()
+  const minimalPreset = page.getByRole('button', { name: 'Sade', exact: true })
+  await minimalPreset.click()
+  await expect(minimalPreset).toHaveAttribute('aria-pressed', 'true')
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy()
+
   const startButton = page.getByRole('button', { name: 'Kaydı başlat' })
   await expect(startButton).toBeEnabled()
   await startButton.click()

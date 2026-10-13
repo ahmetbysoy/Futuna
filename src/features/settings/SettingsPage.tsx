@@ -1,13 +1,16 @@
 import { useMemo, useState } from 'react'
-import { Bell, CheckCircle, Moon, Palette, Sun, WarningCircle } from '@phosphor-icons/react'
+import { Bell, CheckCircle, ChartLineUp, Moon, Palette, Sun, WarningCircle } from '@phosphor-icons/react'
 import { useApp } from '@/app/AppContext'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { useMarket } from '@/features/market/MarketContext'
+import type { MarketMode } from '@/features/market/types'
 import { formatCompact } from '@/lib/format'
 import { readStorage, writeStorage } from '@/lib/storage'
 import { SessionRecorderCard } from '@/features/session/SessionRecorderCard'
+import { ORDERFLOW_PRESET_LABELS, ORDERFLOW_PRESETS, type OrderflowPresetId } from '@/features/orderflow/settings'
+import { useOrderflow } from '@/features/orderflow/useOrderflow'
 
 const LOSS_STORAGE_KEY = 'fs.daily-loss.v1'
 
@@ -23,17 +26,20 @@ function initialLoss() {
 }
 
 export function SettingsPage() {
-  const { theme, setTheme, settings, updateSettings, resetSettings, showToast } = useApp()
-  const { connection, mode, reconnect } = useMarket()
+  const { theme, setTheme, settings, updateSettings, updateOrderflowSettings, resetSettings, showToast } = useApp()
+  const { connection, mode, symbol, reconnect } = useMarket()
   const [search, setSearch] = useState('')
   const [dailyLoss, setDailyLoss] = useState(initialLoss)
   const [lossInput, setLossInput] = useState('')
   const [notificationState, setNotificationState] = useState(() => typeof Notification === 'undefined' ? 'Bu tarayıcı bildirimleri desteklemiyor.' : `Tarayıcı izni: ${Notification.permission}`)
   const query = search.trim().toLowerCase()
+  const currentSymbolThreshold = settings.orderflow.whaleMinBySymbol[symbol] ?? settings.orderflow.whaleMin
+  const hasSymbolThreshold = Object.prototype.hasOwnProperty.call(settings.orderflow.whaleMinBySymbol, symbol)
 
   const sections = useMemo(() => [
     { id: 'appearance', label: 'Görünüm ve bağlantı', search: 'tema açık koyu renk piyasa futures spot websocket bağlantı yeniden bağlan', content: 'Görünümü kişiselleştir ve veri kaynağının durumunu denetle.' },
     { id: 'chart', label: 'Grafik ve göstergeler', search: 'grafik ema bollinger vwap rsi macd sar hacim flow çizgi periyot standart sapma', content: 'Fiyat grafiğinde görünen teknik katmanları seç.' },
+    { id: 'orderflow', label: 'Emir akışı ve mikro yapı', search: 'orderflow order flow emir akışı heatmap ısı haritası dom ladder duvar ray eşik scalp pusula iceberg eşik preset kalibrasyon', content: 'Likidite katmanlarını, büyük işlem eşiklerini ve hazır görünümleri düzenle.' },
     { id: 'signals', label: 'Sinyal ve test varsayımları', search: 'sinyal motoru eşik rsi periyot ücret komisyon bps backtest scanner tarayıcı sembol limit', content: 'Kural tabanlı özet ve tarihsel test için kullanılan ayarları düzenle.' },
     { id: 'alerts', label: 'Ses ve bildirimler', search: 'uyarı alert bildirim browser tarayıcı ses volume titreşim al sat işlem flow', content: 'İsteğe bağlı ses, tarayıcı bildirimi ve mobil titreşim tercihlerini ayarla.' },
     { id: 'risk', label: 'Manuel günlük risk takibi', search: 'risk günlük kayıp limit usdt manuel tracker zarar gün sıfırla', content: 'Sadece senin girdiğin tutarları yerel olarak takip eder; borsa hesabına bağlı değildir.' },
@@ -103,6 +109,25 @@ export function SettingsPage() {
     showToast('Tercihler varsayılanlara döndürüldü.', 'success')
   }
 
+  const applyOrderflowPreset = (presetId: OrderflowPresetId) => {
+    updateOrderflowSettings({ ...ORDERFLOW_PRESETS[presetId], presetId })
+    showToast(`${ORDERFLOW_PRESET_LABELS[presetId]} emir akışı görünümü uygulandı.`, 'success')
+  }
+
+  const updateSymbolThreshold = (value: number) => {
+    updateOrderflowSettings({
+      whaleMinBySymbol: { ...settings.orderflow.whaleMinBySymbol, [symbol]: value },
+      presetId: 'custom',
+    })
+  }
+
+  const resetSymbolThreshold = () => {
+    const whaleMinBySymbol = { ...settings.orderflow.whaleMinBySymbol }
+    delete whaleMinBySymbol[symbol]
+    updateOrderflowSettings({ whaleMinBySymbol, presetId: 'custom' })
+    showToast(`${symbol} için genel eşik tabanı kullanılacak.`, 'success')
+  }
+
   return (
     <div className="page page--settings">
       <div className="page-heading">
@@ -144,6 +169,60 @@ export function SettingsPage() {
                 <NumberSetting id="macd-fast" label="MACD hızlı" value={settings.macdFast} min={2} max={100} onChange={(value) => updateSettings({ macdFast: value })} />
                 <NumberSetting id="macd-slow" label="MACD yavaş" value={settings.macdSlow} min={3} max={200} onChange={(value) => updateSettings({ macdSlow: value })} />
                 <NumberSetting id="macd-signal" label="MACD sinyal" value={settings.macdSignal} min={2} max={100} onChange={(value) => updateSettings({ macdSignal: value })} />
+              </div>
+            </>}
+
+            {section.id === 'orderflow' && <>
+              <div className="orderflow-preset-area">
+                <div><strong>Hazır görünümler</strong><small>Görsel katman ve pusula hassasiyetini birlikte ayarlar. Sembol eşiklerini değiştirmez.</small><span className="orderflow-preset-state">{settings.orderflow.presetId === 'custom' ? 'Özel ayar' : `${ORDERFLOW_PRESET_LABELS[settings.orderflow.presetId]} preset’i etkin`}</span></div>
+                <div className="orderflow-presets" role="group" aria-label="Emir akışı hazır görünümleri">
+                  {(['balanced', 'scalping', 'minimal'] as const).map((presetId) => (
+                    <Button key={presetId} size="sm" variant={settings.orderflow.presetId === presetId ? 'primary' : 'secondary'} aria-pressed={settings.orderflow.presetId === presetId} onClick={() => applyOrderflowPreset(presetId)}>
+                      {ORDERFLOW_PRESET_LABELS[presetId]}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+              <div className="settings-info-note"><ChartLineUp size={16} aria-hidden="true" /><span>Kalibrasyon sembol başına ayrı örnek toplar. “Dinamik eşik” büyük işlem algılama eşiğidir; emir üretmez veya sinyal motorunu değiştirmez.</span></div>
+              <div className="orderflow-calibration-row">
+                <div><strong>{symbol} · büyük işlem eşiği</strong><small>Son 30 örnek ısınma eşiğidir; yeterli veri sonrası p80 kullanılır.</small></div>
+                <OrderflowCalibrationStatus symbol={symbol} mode={mode} />
+              </div>
+              <div className="settings-number-grid">
+                <NumberSetting id="orderflow-default-threshold" label="Genel taban eşik" value={settings.orderflow.whaleMin} min={5_000} max={50_000_000} step={10_000} onChange={(value) => updateOrderflowSettings({ whaleMin: value })} suffix=" USDT" />
+                <NumberSetting id="orderflow-symbol-threshold" label={`${symbol} taban eşiği`} value={currentSymbolThreshold} min={5_000} max={50_000_000} step={10_000} onChange={updateSymbolThreshold} suffix=" USDT" />
+                <NumberSetting id="orderflow-wall-percentile" label="Duvar yüzdeliği" value={settings.orderflow.wallPct} min={60} max={99} onChange={(value) => updateOrderflowSettings({ wallPct: value })} suffix="%" />
+                <NumberSetting id="orderflow-wall-count" label="Canlı duvar sayısı" value={settings.orderflow.liveWallCount} min={2} max={20} onChange={(value) => updateOrderflowSettings({ liveWallCount: value })} />
+                <NumberSetting id="orderflow-wall-range" label="Duvar izleme aralığı" value={settings.orderflow.liveWallRange} min={0.1} max={2} step={0.1} onChange={(value) => updateOrderflowSettings({ liveWallRange: value })} suffix="% mid" />
+                <NumberSetting id="orderflow-ice-ticks" label="Iceberg yakınlığı" value={settings.orderflow.compassIceTick} min={1} max={100} onChange={(value) => updateOrderflowSettings({ compassIceTick: value })} suffix="tick" />
+                <NumberSetting id="orderflow-wall-ticks" label="Pusula duvar aralığı" value={settings.orderflow.compassWallTick} min={1} max={100} onChange={(value) => updateOrderflowSettings({ compassWallTick: value })} suffix="tick" />
+                <div className="field-group"><label htmlFor="orderflow-compass-half">Pusula yarı ömrü</label><select id="orderflow-compass-half" value={settings.orderflow.compassHalf} onChange={(event) => updateOrderflowSettings({ compassHalf: Number(event.target.value) as 5_000 | 10_000 | 20_000 | 30_000 })}><option value={5_000}>5 saniye</option><option value={10_000}>10 saniye</option><option value={20_000}>20 saniye</option><option value={30_000}>30 saniye</option></select></div>
+              </div>
+              <div className="settings-row">
+                <div><strong>{symbol} özel eşiği</strong><small>{hasSymbolThreshold ? 'Bu sembolün özel taban eşiği etkin.' : 'Özel eşik yok; genel taban eşik kullanılıyor.'}</small></div>
+                <Button size="sm" variant="secondary" disabled={!hasSymbolThreshold} onClick={resetSymbolThreshold}>Sembol eşiğini kaldır</Button>
+              </div>
+              <div className="orderflow-setting-group">
+                <strong>Grafik katmanları</strong>
+                <Toggle id="orderflow-heatmap" label="15 dakikalık likidite ısı haritası" description="Son 900 saniyenin sınırlı DOM örneklerini fiyat/zaman üzerinde göster." checked={settings.orderflow.showHeatmap} onChange={(value) => updateOrderflowSettings({ showHeatmap: value })} />
+                <Toggle id="orderflow-ladder" label="DOM kademe yoğunluğu" description="Görünen fiyat aralığındaki alış/satış notional yoğunluğu." checked={settings.orderflow.showLadder} onChange={(value) => updateOrderflowSettings({ showLadder: value })} />
+                <Toggle id="orderflow-wall-rays" label="Likidite duvarı ışınları" description="Göreli büyük defter kümelerini kademelere bağlı kısa ışınlarla işaretle." checked={settings.orderflow.showWallRays} onChange={(value) => updateOrderflowSettings({ showWallRays: value })} />
+                <Toggle id="orderflow-live-walls" label="Canlı duvar izleme" description="Senkronize defterdeki duvarların yaşını, değişimini ve emilimini göster." checked={settings.orderflow.showLiveWalls} onChange={(value) => updateOrderflowSettings({ showLiveWalls: value })} />
+                <Toggle id="orderflow-wall-labels" label="Işın notional etiketleri" description="Grafik üzerindeki duvar ışınlarına yoğunluk değerleri ekle." checked={settings.orderflow.wallLabels} onChange={(value) => updateOrderflowSettings({ wallLabels: value })} />
+                <Toggle id="orderflow-established" label="Yalnızca oturmuş duvarları göster" description="Işınlarda en az 25 saniye izlenen seviyeleri öne çıkar." checked={settings.orderflow.wallEstOnly} onChange={(value) => updateOrderflowSettings({ wallEstOnly: value })} />
+                <div className="settings-number-grid">
+                  <div className="field-group"><label htmlFor="orderflow-ladder-side">DOM konumu</label><select id="orderflow-ladder-side" value={settings.orderflow.ladderSide} onChange={(event) => updateOrderflowSettings({ ladderSide: event.target.value as 'left' | 'right' | 'both' })}><option value="right">Sağ</option><option value="left">Sol</option><option value="both">İki taraf</option></select></div>
+                  <NumberSetting id="orderflow-ladder-width" label="Kademe genişliği" value={settings.orderflow.ladderWidth} min={24} max={96} onChange={(value) => updateOrderflowSettings({ ladderWidth: value })} suffix="px" />
+                  <div className="field-group"><label htmlFor="orderflow-ray-length">Işın uzunluğu</label><select id="orderflow-ray-length" value={settings.orderflow.wallRayLen} onChange={(event) => updateOrderflowSettings({ wallRayLen: event.target.value as 'short' | 'medium' | 'long' })}><option value="short">Kısa</option><option value="medium">Orta</option><option value="long">Uzun</option></select></div>
+                  <div className="field-group orderflow-opacity-setting"><label htmlFor="orderflow-wall-opacity">Katman opaklığı</label><div className="range-control"><input id="orderflow-wall-opacity" type="range" min={10} max={100} step={5} value={Math.round(settings.orderflow.wallOpacity * 100)} aria-label="Katman opaklığı" onChange={(event) => updateOrderflowSettings({ wallOpacity: Number(event.target.value) / 100 })} /><output htmlFor="orderflow-wall-opacity">{Math.round(settings.orderflow.wallOpacity * 100)}%</output></div></div>
+                </div>
+              </div>
+              <div className="orderflow-setting-group">
+                <strong>Canlı davranış ve olaylar</strong>
+                <Toggle id="orderflow-pulse" label="Duvar nabzı" description="Hareketi azalt tercihi açıksa animasyon kendiliğinden durur." checked={settings.orderflow.liveWallPulse} onChange={(value) => updateOrderflowSettings({ liveWallPulse: value })} />
+                <Toggle id="orderflow-flash" label="Yeni duvar parlaması" description="Yeni oluşan duvarları kısa süreyle vurgula." checked={settings.orderflow.liveWallFlash} onChange={(value) => updateOrderflowSettings({ liveWallFlash: value })} />
+                <Toggle id="orderflow-live-labels" label="Canlı duvar etiketleri" description="Taraf, notional ve izleme yaşını göster." checked={settings.orderflow.liveWallLabels} onChange={(value) => updateOrderflowSettings({ liveWallLabels: value })} />
+                <Toggle id="orderflow-whale-events" label="Büyük işlem olaylarını algıla" description="Dinamik sembol eşiğini geçen işlemleri işaret ve olay akışına ekle." checked={settings.orderflow.whaleAlerts} onChange={(value) => updateOrderflowSettings({ whaleAlerts: value })} />
               </div>
             </>}
 
@@ -192,6 +271,32 @@ function Toggle({ id, label, description, checked, onChange }: { id: string; lab
 
 function NumberSetting({ id, label, value, min, max, step = 1, suffix = '', onChange }: { id: string; label: string; value: number; min: number; max: number; step?: number; suffix?: string; onChange: (value: number) => void }) {
   return <div className="field-group"><label htmlFor={id}>{label}</label><div className="number-with-suffix"><input id={id} type="number" value={value} min={min} max={max} step={step} onChange={(event) => { const next = Number(event.target.value); if (Number.isFinite(next)) onChange(Math.max(min, Math.min(max, next))) }} /><span>{suffix}</span></div></div>
+}
+
+function OrderflowCalibrationStatus({ symbol, mode }: { symbol: string; mode: MarketMode }) {
+  const snapshot = useOrderflow()
+  const isCurrent = snapshot.symbol === symbol && snapshot.mode === mode
+  const calibration = snapshot.calibration
+  const threshold = isCurrent ? calibration.threshold : null
+  const sampleCount = isCurrent ? calibration.samples : 0
+  const warm = isCurrent && calibration.warm
+  const description = !isCurrent
+    ? 'Sembol verisi eşitleniyor.'
+    : mode === 'offline'
+      ? 'Veri kaynağı çevrimdışı; taban eşik gösterilir.'
+      : warm
+        ? `Otomatik p80 kalibrasyonu etkin · ${sampleCount} örnek`
+        : `Taban eşik kullanılıyor · ${sampleCount}/30 kalibrasyon örneği`
+
+  return (
+    <div className="orderflow-calibration-status">
+      <div><span>Etkin eşik</span><strong className="mono">{threshold == null ? '—' : formatCompact(threshold, ' USDT')}</strong></div>
+      <small>{warm && calibration.p80 != null ? `${description} · p80 ${formatCompact(calibration.p80)} USDT` : description}</small>
+      <div className="orderflow-calibration-progress" role="progressbar" aria-label="Sembol kalibrasyon örnekleri" aria-valuemin={0} aria-valuemax={30} aria-valuenow={Math.min(30, sampleCount)}>
+        <span style={{ width: `${Math.min(100, sampleCount / 30 * 100)}%` }} />
+      </div>
+    </div>
+  )
 }
 
 function EmptySettings() {

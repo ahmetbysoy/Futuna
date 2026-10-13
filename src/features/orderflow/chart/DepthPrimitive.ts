@@ -32,6 +32,7 @@ export type WallRayLength = 'short' | 'medium' | 'long'
 export interface DepthOverlayOptions {
   showHeatmap: boolean
   showLadder: boolean
+  showWallRays: boolean
   showLiveWalls: boolean
   ladderSide: LadderSide
   ladderWidth: number
@@ -49,6 +50,7 @@ export interface DepthOverlayOptions {
 export const DEFAULT_DEPTH_OVERLAY_OPTIONS: Readonly<DepthOverlayOptions> = Object.freeze({
   showHeatmap: true,
   showLadder: true,
+  showWallRays: true,
   showLiveWalls: true,
   ladderSide: 'right',
   ladderWidth: 48,
@@ -339,7 +341,7 @@ export class DepthPrimitive implements ISeriesPrimitive<Time> {
       if (this.options.showLadder && ladderWidth >= 16) {
         this.drawLadder(context, rows, geometry.side, width, ladderWidth, logMax, palette)
       }
-      this.drawWallRays(context, walls, geometry, height, logMax, palette)
+      if (this.options.showWallRays) this.drawWallRays(context, walls, geometry, height, logMax, palette)
     }
 
     const activeRay = this.options.ladderSide === 'left' ? activeRays.left : activeRays.right
@@ -786,6 +788,7 @@ function normalizeOptions(options: DepthOverlayOptions): DepthOverlayOptions {
   return {
     showHeatmap: Boolean(options.showHeatmap),
     showLadder: Boolean(options.showLadder),
+    showWallRays: Boolean(options.showWallRays),
     showLiveWalls: Boolean(options.showLiveWalls),
     ladderSide: options.ladderSide === 'left' || options.ladderSide === 'both' ? options.ladderSide : 'right',
     ladderWidth: clamp(options.ladderWidth, 16, MAX_LADDER_WIDTH),

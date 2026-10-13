@@ -123,7 +123,7 @@ export class OrderflowRuntime {
         compassWallTick: this.config.compassWallTick,
       },
     })
-    this.store.setComputedMetrics(cvd, obi, compass)
+    this.store.setComputedMetrics(cvd, obi, compass, this.calibrator.status())
 
     if (raw.depthSynced && raw.depthReady) {
       const frame = this.heatSampler.sample(this.heatInput(raw), now)
@@ -312,7 +312,12 @@ export class OrderflowRuntime {
     this.store.replaceWalls([])
     this.store.replaceWallAges([])
     const now = this.clock.now()
-    this.store.setComputedMetrics(this.multiCvd.momentum(now), this.multiObi.alignment(now), this.compassEngine.snapshot())
+    this.store.setComputedMetrics(
+      this.multiCvd.momentum(now),
+      this.multiObi.alignment(now),
+      this.compassEngine.snapshot(),
+      this.calibrator.status(),
+    )
   }
 
   private emit(events: readonly FlowEventDraft[]) {

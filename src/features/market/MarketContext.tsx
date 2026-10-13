@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { readStorage, writeStorage } from '@/lib/storage'
+import { useApp } from '@/app/AppContext'
 import { orderflowStore } from '@/features/orderflow/orderflowStore'
 import { orderflowRuntime } from '@/features/orderflow/orderflowRuntime'
 import { useDepthBook, type DepthBookEvent } from './useDepthBook'
@@ -94,6 +95,7 @@ function wsUrl(mode: MarketMode, symbol: string, timeframe: Timeframe) {
 }
 
 export function MarketProvider({ children }: { children: ReactNode }) {
+  const { settings } = useApp()
   const [symbols, setSymbols] = useState<MarketSymbol[]>([])
   const [symbol, setSymbolState] = useState(() => readStorage('fs.symbol.v2', 'BTCUSDT'))
   const [timeframe, setTimeframeState] = useState<Timeframe>(() => readStorage('fs.timeframe.v2', '1m'))
@@ -120,12 +122,27 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   const lastTradeQuoteAtRef = useRef(0)
   const orderflowGenerationRef = useRef(0)
   const orderflowSessionKey = `${symbol}|${mode}|${timeframe}`
+  const orderflowSettings = settings.orderflow
+  const whaleMin = orderflowSettings.whaleMinBySymbol[symbol] ?? orderflowSettings.whaleMin
 
   useEffect(() => {
     orderflowGenerationRef.current = orderflowStore.reset(symbol, mode, timeframe)
   }, [mode, symbol, timeframe])
 
   useEffect(() => orderflowRuntime.start(), [])
+
+  useEffect(() => {
+    orderflowRuntime.setConfig({
+      whaleMin,
+      whaleAlerts: orderflowSettings.whaleAlerts,
+      wallPct: orderflowSettings.wallPct,
+      liveWallCount: orderflowSettings.liveWallCount,
+      liveWallRange: orderflowSettings.liveWallRange,
+      compassHalf: orderflowSettings.compassHalf,
+      compassIceTick: orderflowSettings.compassIceTick,
+      compassWallTick: orderflowSettings.compassWallTick,
+    })
+  }, [mode, symbol, whaleMin, orderflowSettings.whaleAlerts, orderflowSettings.wallPct, orderflowSettings.liveWallCount, orderflowSettings.liveWallRange, orderflowSettings.compassHalf, orderflowSettings.compassIceTick, orderflowSettings.compassWallTick])
 
   useEffect(() => {
     const selected = symbols.find((item) => item.symbol === symbol)
