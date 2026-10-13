@@ -30,7 +30,7 @@ Add a modular, read-only `src/features/orderflow/` layer to the existing Vite + 
 |---|---|---|---|
 | 0 | Inspect repository, baseline, reference behavior, and v5 APIs | `npm ci`, `npm run check`, `npm run build`; read outputs | Complete |
 | 1 | Add order-flow types, React-independent bounded store, generation-safe market/depth ingestion, tick-size feed, throttled `useSyncExternalStore` hook | `npm run check`/`npm run build` PASS; 26 existing Playwright tests PASS; direct store smoke PASS for full depth/diffs, 8k trades, 500 liquidations, 40 events, 900 heat frames, and generation/spot guards | Complete |
-| 2 | Add pure clock-injected engines: calibrator, CVD/OBI, trade detectors, spoof/filled, DOM sweep, iceberg, wall tracker, heat sampler, compass; add Vitest | Engine-specific normal/threshold/cooldown/reset tests; `npm run test:unit`; check/build | Not started |
+| 2 | Add pure clock-injected engines: calibrator, CVD/OBI, trade detectors, spoof/filled, DOM sweep, iceberg, wall tracker, heat sampler, compass; integrate the raw-store runtime; add Vitest | `npm run test:unit`: 16/16 PASS; `npm run check` PASS; `npm run build` PASS; Playwright matrix 26/26 PASS | Complete |
 | 3 | Add v5 `DepthPrimitive` and `createSeriesMarkers` integration; expose chart/series lifecycle; implement heatmap, ladder, rays, live walls, mid/spread/last-price lines | Fixture-backed primitive drawing; pan/zoom/resize/theme alignment; mobile chart bounds; check/build | Not started |
 | 4 | Add `DecisionStrip`, `FlowMini`, `CompassWidget`, `ChartStatusPill`; integrate chart panel/dashboard and expanded event list | Responsive 360/390/430/768/1280 checks; keyboard/semantic review; E2E snapshots; check/build | Not started |
 | 5 | Persist order-flow settings, searchable advanced cards, three presets and custom-preset state | Persistence, preset, search and reset E2E; check/build | Not started |
@@ -45,6 +45,8 @@ Add a modular, read-only `src/features/orderflow/` layer to the existing Vite + 
 - [x] Symbol/mode/timeframe generations prevent stale stream writes; spot mode does not fabricate futures-only data.
 - [x] Existing 400 ms top-20 `useDepthBook` publication and Order Book panel remain unchanged.
 - [x] All high-rate collections have explicit count/time bounds; 15-minute heat history is a fixed ring, not repeated array shifting.
+- [x] Pure engine coverage and store-driven runtime integration are in place; CVD/OBI and the separate compass do not modify `signalEngine` or decision scoring.
+- [x] Heat sampling is capped to 220 bins per one-second frame and 900 frames; wall history and per-symbol calibration samples are bounded.
 - [ ] v5 chart primitive aligns to price/time coordinates on pan, zoom, resize, and theme change; canvas colors are explicit hex/RGBA values.
 - [ ] Detector outputs appear consistently in chart markers, flow events, session records, and alerts.
 - [ ] Existing decision/signal scoring remains unchanged; new compass is a separate read-only indicator.

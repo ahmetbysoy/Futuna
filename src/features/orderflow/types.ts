@@ -4,6 +4,8 @@ export type OrderflowSide = 'buy' | 'sell' | 'bid' | 'ask' | 'long' | 'short'
 export type FlowSeverity = 'low' | 'medium' | 'high'
 export type WallTrend = 'GROWING' | 'SHRINKING' | 'STABLE'
 export type CompassDirection = 'BULL' | 'BEAR' | 'FLAT'
+export type ObiTrend = 'RISING' | 'FALLING' | 'FLAT'
+export type ObiAlignment = 'BULL' | 'BEAR' | 'MIXED'
 
 export type FlowEventType =
   | 'WHALE'
@@ -45,7 +47,10 @@ export interface FlowEventRecord {
   notional?: number
   direction?: 'LONG' | 'SHORT'
   source?: 'trade' | 'depth' | 'market'
+  data?: Record<string, string | number | boolean | null>
 }
+
+export type FlowEventDraft = Omit<FlowEventRecord, 'id'>
 
 export interface WallHistoryPoint {
   ts: number
@@ -104,6 +109,27 @@ export interface CompassState {
   updatedAt: number | null
 }
 
+export interface CvdMomentum {
+  s10: number
+  s30: number
+  s60: number
+  s180: number
+  direction: CompassDirection
+  accelerating: boolean
+  allAligned: boolean
+  score: number
+}
+
+export interface ObiSnapshot {
+  s5: number
+  s15: number
+  s30: number
+  s60: number
+  aligned: ObiAlignment
+  strength: number
+  trend: ObiTrend
+}
+
 export interface DetectorConfig {
   whaleMin: number
   whaleAlerts: boolean
@@ -116,32 +142,36 @@ export interface DetectorConfig {
 }
 
 export interface OrderflowSnapshot {
-  symbol: string
-  mode: MarketMode
-  timeframe: Timeframe
-  generation: number
-  tickSize: number
-  depthTickSize: number
-  bestBid: number | null
-  bestAsk: number | null
-  spread: number | null
-  depthReady: boolean
-  depthSynced: boolean
-  depthStatus: DepthSyncStatus
-  tradeCount: number
-  liquidationCount: number
-  lastTrade: OrderflowTrade | null
-  lastLiquidation: LiquidationRecord | null
-  lastTradeTs: number | null
-  lastDepthTs: number | null
-  lastMarkTs: number | null
-  lastWsTs: number | null
-  markPrice: number | null
-  funding: number | null
-  oi: number | null
-  oiChangePct: number | null
-  events: readonly FlowEventRecord[]
-  walls: readonly WallRecord[]
-  compass: CompassState
-  heatFrameCount: number
+  readonly symbol: string
+  readonly mode: MarketMode
+  readonly timeframe: Timeframe
+  readonly generation: number
+  readonly tickSize: number
+  readonly depthTickSize: number
+  readonly bestBid: number | null
+  readonly bestAsk: number | null
+  readonly spread: number | null
+  readonly depthReady: boolean
+  readonly depthSynced: boolean
+  readonly depthStatus: DepthSyncStatus
+  readonly tradeCount: number
+  readonly liquidationCount: number
+  readonly lastTrade: OrderflowTrade | null
+  readonly lastLiquidation: LiquidationRecord | null
+  readonly lastTradeTs: number | null
+  readonly lastDepthTs: number | null
+  readonly lastMarkTs: number | null
+  readonly lastWsTs: number | null
+  readonly lastSweepTs: number | null
+  readonly lastSweepDirection: 'LONG' | 'SHORT' | null
+  readonly markPrice: number | null
+  readonly funding: number | null
+  readonly oi: number | null
+  readonly oiChangePct: number | null
+  readonly cvd: CvdMomentum
+  readonly obi: ObiSnapshot
+  readonly events: readonly FlowEventRecord[]
+  readonly walls: readonly WallRecord[]
+  readonly compass: CompassState
+  readonly heatFrameCount: number
 }

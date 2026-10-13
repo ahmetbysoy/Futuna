@@ -6,8 +6,10 @@ import type {
   FlowEventRecord,
   FlowEventType,
   FlowSeverity,
+  CvdMomentum,
   HeatFrame,
   LiquidationRecord,
+  ObiSnapshot,
   OrderflowSide,
   OrderflowSnapshot,
   OrderflowTrade,
@@ -131,7 +133,12 @@ interface MutableOrderflowState {
   funding: number | null
   oi: number | null
   oiChangePct: number | null
+  lastSweepTs: number | null
+  lastSweepDirection: 'LONG' | 'SHORT' | null
+  cvd: CvdMomentum
+  obi: ObiSnapshot
   compass: CompassState
+  depthActivity: OrderflowDepthActivity | null
   eventSequence: number
 }
 
@@ -152,6 +159,7 @@ export interface OrderflowRawState {
   readonly depthSynced: boolean
   readonly depthStatus: DepthSyncStatus
   readonly lastUpdateId: number | null
+  readonly depthActivity: OrderflowDepthActivity | null
   readonly trades: RingBufferView<OrderflowTrade>
   readonly liquidations: RingBufferView<LiquidationRecord>
   readonly events: RingBufferView<FlowEventRecord>
@@ -168,6 +176,10 @@ export interface OrderflowRawState {
   readonly funding: number | null
   readonly oi: number | null
   readonly oiChangePct: number | null
+  readonly lastSweepTs: number | null
+  readonly lastSweepDirection: 'LONG' | 'SHORT' | null
+  readonly cvd: CvdMomentum
+  readonly obi: ObiSnapshot
   readonly compass: CompassState
 }
 
@@ -192,6 +204,17 @@ export interface DepthBookDiffUpdate {
   updatedAt: number
 }
 
+export type OrderflowDepthActivity =
+  | { kind: 'status'; status: DepthSyncStatus; updatedAt: number | null; clearBook?: boolean }
+  | { kind: 'snapshot'; updatedAt: number; lastUpdateId: number }
+  | {
+      kind: 'diff'
+      bids: readonly [number, number][]
+      asks: readonly [number, number][]
+      updatedAt: number
+      lastUpdateId: number
+    }
+
 export type NewFlowEvent = Omit<FlowEventRecord, 'id' | 'ts'> & {
   id?: string
   ts?: number
@@ -209,6 +232,31 @@ function emptyCompass(): CompassState {
     label: 'Nötr / sıkışma',
     color: '#93a59a',
     updatedAt: null,
+  }
+}
+
+function emptyCvd(): CvdMomentum {
+  return {
+    s10: 0,
+    s30: 0,
+    s60: 0,
+    s180: 0,
+    direction: 'FLAT',
+    accelerating: false,
+    allAligned: false,
+    score: 0,
+  }
+}
+
+function emptyObi(): ObiSnapshot {
+  return {
+    s5: 0,
+    s15: 0,
+    s30: 0,
+    s60: 0,
+    aligned: 'MIXED',
+    strength: 0,
+    trend: 'FLAT',
   }
 }
 
@@ -247,7 +295,12 @@ function createState(symbol: string, mode: MarketMode, timeframe: Timeframe, gen
     funding: null,
     oi: null,
     oiChangePct: null,
+    lastSweepTs: null,
+    lastSweepDirection: null,
+    cvd: emptyCvd(),
+    obi: emptyObi(),
     compass: emptyCompass(),
+    depthActivity: null,
     eventSequence: 0,
   }
 }
@@ -344,6 +397,7 @@ export class OrderflowStore {
       state.depthSynced = false
     }
     if (update.updatedAt != null && Number.isFinite(update.updatedAt)) state.lastDepthTs = update.updatedAt
+    state.depthActivity = { kind: 'status', ...update }
     this.changed()
     return true
   }
@@ -359,6 +413,7 @@ export class OrderflowStore {
     state.depthStatus = update.status
     state.depthSynced = update.status === 'live'
     state.lastDepthTs = update.updatedAt
+    state.depthActivity = { kind: 'snapshot', updatedAt: update.updatedAt, lastUpdateId: update.lastUpdateId }
     this.refreshTopOfBook(state)
     this.changed()
     return true
@@ -372,6 +427,13 @@ export class OrderflowStore {
     this.state.depthStatus = 'live'
     this.state.depthSynced = true
     this.state.lastDepthTs = update.updatedAt
+    this.state.depthActivity = {
+      kind: 'diff',
+      bids: update.bids.map(([price, quantity]) => [price, quantity] as const),
+      asks: update.asks.map(([price, quantity]) => [price, quantity] as const),
+      lastUpdateId: update.lastUpdateId,
+      updatedAt: update.updatedAt,
+    }
     this.refreshTopOfBook(this.state)
     this.changed()
     return true
@@ -433,6 +495,13 @@ export class OrderflowStore {
     const id = event.id ?? `${this.state.generation}-${Math.trunc(ts)}-${++this.state.eventSequence}`
     const record: FlowEventRecord = { ...event, id, ts }
     this.state.events.push(record)
+    if (record.type === 'SWEEP' || record.type === 'DOM SWEEP') {
+      const direction = record.direction ?? (record.side === 'buy' ? 'LONG' : record.side === 'sell' ? 'SHORT' : null)
+      if (direction) {
+        this.state.lastSweepTs = ts
+        this.state.lastSweepDirection = direction
+      }
+    }
     this.changed()
     for (const listener of Array.from(this.eventListeners)) listener(record)
     return record
@@ -442,6 +511,15 @@ export class OrderflowStore {
     this.state.compass = {
       ...compass,
       components: { ...compass.components },
+    }
+    this.changed()
+  }
+
+  setComputedMetrics(cvd: CvdMomentum, obi: ObiSnapshot, compass?: CompassState) {
+    this.state.cvd = { ...cvd }
+    this.state.obi = { ...obi }
+    if (compass) {
+      this.state.compass = { ...compass, components: { ...compass.components } }
     }
     this.changed()
   }
@@ -474,6 +552,23 @@ export class OrderflowStore {
       this.state.wallAges.delete(firstKey)
     }
     this.changed()
+  }
+
+  replaceWallAges(records: readonly WallAgeRecord[]) {
+    this.state.wallAges.clear()
+    for (const record of records.slice(0, MAX_WALL_AGES)) this.state.wallAges.set(record.key, { ...record })
+    this.changed()
+  }
+
+  updateWallAges(upserts: readonly WallAgeRecord[], removes: readonly string[]) {
+    for (const key of removes) this.state.wallAges.delete(key)
+    for (const record of upserts) this.state.wallAges.set(record.key, { ...record })
+    while (this.state.wallAges.size > MAX_WALL_AGES) {
+      const firstKey = this.state.wallAges.keys().next().value as string | undefined
+      if (firstKey == null) break
+      this.state.wallAges.delete(firstKey)
+    }
+    if (upserts.length > 0 || removes.length > 0) this.changed()
   }
 
   removeWallAge(key: string) {
@@ -607,6 +702,10 @@ export class OrderflowStore {
       funding: state.funding,
       oi: state.oi,
       oiChangePct: state.oiChangePct,
+      lastSweepTs: state.lastSweepTs,
+      lastSweepDirection: state.lastSweepDirection,
+      cvd: { ...state.cvd },
+      obi: { ...state.obi },
       events,
       walls,
       compass,

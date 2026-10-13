@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { readStorage, writeStorage } from '@/lib/storage'
 import { orderflowStore } from '@/features/orderflow/orderflowStore'
+import { orderflowRuntime } from '@/features/orderflow/orderflowRuntime'
 import { useDepthBook, type DepthBookEvent } from './useDepthBook'
 import {
   discoverProvider,
@@ -123,6 +124,8 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     orderflowGenerationRef.current = orderflowStore.reset(symbol, mode, timeframe)
   }, [mode, symbol, timeframe])
+
+  useEffect(() => orderflowRuntime.start(), [])
 
   useEffect(() => {
     const selected = symbols.find((item) => item.symbol === symbol)
