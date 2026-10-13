@@ -21,7 +21,7 @@ export function FlowPanel({ compact = false }: { compact?: boolean }) {
       <CardHeader className="flow-card__header">
         <div className="section-title-group">
           <span className="section-icon" aria-hidden="true"><Waves size={17} /></span>
-          <div><CardTitle>Order flow</CardTitle><p className="card-subtitle">Son 60 saniye · anlık akış</p></div>
+          <div><CardTitle>Emir akışı</CardTitle><p className="card-subtitle">Son 60 saniye · anlık akış</p></div>
         </div>
         <span className="flow-live-label"><i aria-hidden="true" />{flow.lastTradeAt ? `Güncellendi ${formatTime(flow.lastTradeAt)}` : 'İşlem akışı bekleniyor'}</span>
       </CardHeader>

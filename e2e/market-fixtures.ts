@@ -77,6 +77,19 @@ export async function mockMarketApi(page: Page) {
             b: [['66899', '0.9']], a: [['66902', '0.75']],
           }), 45)
         }
+        if (this.url.includes('@aggTrade')) {
+          window.setTimeout(() => this.emitTrade({
+            e: 'aggTrade', s: 'BTCUSDT', p: '66900.25', q: '6',
+            T: Date.UTC(2026, 0, 1) + 238 * 60_000, m: false,
+          }), 55)
+        }
+      }
+
+      private emitTrade(payload: Record<string, unknown>) {
+        if (this.readyState !== MockWebSocket.OPEN) return
+        const event = new MessageEvent('message', { data: JSON.stringify(payload) })
+        this.dispatchEvent(event)
+        this.onmessage?.(event)
       }
 
       private emitDepth(payload: Record<string, unknown>) {

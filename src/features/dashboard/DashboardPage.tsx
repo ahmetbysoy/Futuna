@@ -8,6 +8,9 @@ import { FlowPanel } from '@/features/flow/FlowPanel'
 import { OrderBookPanel } from '@/features/flow/OrderBookPanel'
 import { MarketStats } from '@/features/market/MarketStats'
 import { PriceChartPanel } from '@/features/chart/PriceChartPanel'
+import { DecisionStrip } from '@/features/orderflow/components/DecisionStrip'
+import { FlowMini } from '@/features/orderflow/components/FlowMini'
+import { ScalpingCompass } from '@/features/orderflow/components/ScalpingCompass'
 
 export function DashboardPage() {
   const { mode, modeReason, connection, error, reconnect, loadingSymbols } = useMarket()
@@ -40,10 +43,12 @@ export function DashboardPage() {
       )}
 
       <MarketStats />
+      {settings.showFlow && <DecisionStrip />}
       <div className="dashboard-grid">
         <div className="dashboard-grid__primary"><PriceChartPanel /></div>
         <aside className="dashboard-grid__side" aria-label="Sinyal ve özet">
           <DecisionCard />
+          {settings.showFlow && <ScalpingCompass />}
           <Card className="context-card">
             <div className="context-card__label"><span>VERİ KALİTESİ</span><ArrowSquareOut size={15} aria-hidden="true" /></div>
             <strong>{connection === 'live' ? 'Akış bağlantısı açık' : connection === 'offline' ? 'Akış çevrimdışı' : 'Bağlantı kuruluyor'}</strong>
@@ -51,6 +56,7 @@ export function DashboardPage() {
           </Card>
         </aside>
       </div>
+      {settings.showFlow && <FlowMini />}
       {settings.showFlow && <FlowPanel />}
       {settings.showFlow && <OrderBookPanel />}
       <p className="disclaimer"><strong>Bilgilendirme:</strong> Gösterilen kurallar ve metrikler eğitim/analiz amaçlıdır; yatırım tavsiyesi, getiri garantisi veya emir değildir. Kaldıraçlı işlemler yüksek risk taşır.</p>

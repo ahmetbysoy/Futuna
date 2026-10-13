@@ -46,6 +46,10 @@ test('order-flow chart layers survive theme changes and narrow resizes', async (
   page.on('pageerror', (error) => pageErrors.push(error.message))
   await page.goto('/')
 
+  await expect(page.locator('.orderflow-decision-strip')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Scalping pusulası' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'FlowMini' })).toBeVisible()
+  await expect(page.locator('.flow-mini-event').first()).toContainText('Büyük işlem')
   const chart = page.locator('.chart-visual')
   await expect(chart).toBeVisible()
   await expect(page.locator('.depth-status--live')).toBeVisible()
