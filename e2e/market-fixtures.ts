@@ -48,6 +48,7 @@ export async function mockMarketApi(page: Page) {
       constructor(url: string | URL) {
         super()
         this.url = String(url)
+        window.addEventListener('mock-orderflow-liquidation', this.handleMockLiquidation)
         window.setTimeout(() => this.open(), 0)
       }
 
@@ -56,6 +57,7 @@ export async function mockMarketApi(page: Page) {
       close(code = 1000, reason = '') {
         if (this.readyState >= MockWebSocket.CLOSING) return
         this.readyState = MockWebSocket.CLOSED
+        window.removeEventListener('mock-orderflow-liquidation', this.handleMockLiquidation)
         const event = new CloseEvent('close', { code, reason, wasClean: true })
         this.dispatchEvent(event)
         this.onclose?.(event)
@@ -78,14 +80,23 @@ export async function mockMarketApi(page: Page) {
           }), 45)
         }
         if (this.url.includes('@aggTrade')) {
-          window.setTimeout(() => this.emitTrade({
+          window.setTimeout(() => this.emitMessage({
             e: 'aggTrade', s: 'BTCUSDT', p: '66900.25', q: '6',
             T: Date.UTC(2026, 0, 1) + 238 * 60_000, m: false,
           }), 55)
         }
       }
 
-      private emitTrade(payload: Record<string, unknown>) {
+      private readonly handleMockLiquidation = () => {
+        if (!this.url.includes('@forceOrder') || this.readyState !== MockWebSocket.OPEN) return
+        const timestamp = Date.now()
+        this.emitMessage({
+          e: 'forceOrder', s: 'BTCUSDT', E: timestamp,
+          o: { s: 'BTCUSDT', S: 'BUY', o: 'MARKET', f: 'IOC', q: '6', ap: '66900.25', X: 'FILLED', l: '6', z: '6', T: timestamp },
+        })
+      }
+
+      private emitMessage(payload: Record<string, unknown>) {
         if (this.readyState !== MockWebSocket.OPEN) return
         const event = new MessageEvent('message', { data: JSON.stringify(payload) })
         this.dispatchEvent(event)

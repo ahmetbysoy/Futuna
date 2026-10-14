@@ -362,7 +362,7 @@ export class OrderflowStore {
 
   readonly subscribeEvents = (listener: (event: FlowEventRecord) => void) => {
     this.eventListeners.add(listener)
-    return () => this.eventListeners.delete(listener)
+    return () => { this.eventListeners.delete(listener) }
   }
 
   reset(symbol: string, mode: MarketMode = 'offline', timeframe: Timeframe = '1m') {

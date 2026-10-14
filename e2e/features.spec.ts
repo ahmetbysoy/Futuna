@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import { mockMarketApi } from './market-fixtures'
 
@@ -23,6 +24,38 @@ test('connection state is labeled and alert preferences are interactive', async 
   await expect(alertsEnabled).not.toBeChecked()
   await alertsEnabled.check()
   await expect(alertsEnabled).toBeChecked()
+})
+
+test('orderflow high-flow events use local alert preferences', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('fs.settings.v2', JSON.stringify({
+      alertsEnabled: true,
+      alertOnHighFlow: true,
+      alertVolume: 0,
+      notificationsEnabled: true,
+      vibrationEnabled: false,
+    }))
+    const target = window as Window & { __alertNotifications?: string[] }
+    target.__alertNotifications = []
+    class NotificationStub {
+      static permission = 'granted'
+      onclick: ((event: Event) => void) | null = null
+      constructor(title: string, options?: NotificationOptions) {
+        target.__alertNotifications?.push(`${title} · ${options?.body ?? ''}`)
+      }
+      close() {}
+    }
+    Object.defineProperty(window, 'Notification', { configurable: true, writable: true, value: NotificationStub })
+  })
+  await page.goto('/')
+  await expect(page.locator('.topbar__status .connection-badge')).toHaveText('Canlı')
+  await expect(page.locator('.depth-status--live')).toBeVisible()
+  await page.evaluate(() => window.dispatchEvent(new Event('mock-orderflow-liquidation')))
+  await expect(page.locator('.flow-mini-event').filter({ hasText: 'Tasfiye' }).first()).toBeVisible()
+  await expect.poll(() => page.evaluate(() => {
+    const target = window as Window & { __alertNotifications?: string[] }
+    return target.__alertNotifications?.some((message) => message.includes('Tasfiye')) ?? false
+  })).toBe(true)
 })
 
 test('orderflow presets and symbol thresholds persist locally', async ({ page }) => {
@@ -62,6 +95,11 @@ test('session recorder starts, stops, and exports JSON', async ({ page }) => {
   await expect(startButton).toBeEnabled()
   await startButton.click()
   await expect(page.getByText('Kaydediliyor', { exact: true })).toBeVisible()
+  await page.evaluate(() => window.dispatchEvent(new Event('mock-orderflow-liquidation')))
+  await expect.poll(() => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('fs.session-recorder.v1') ?? '{}')
+    return saved.active?.events?.some((event: { type: string }) => event.type === 'ORDERFLOW_LIQUIDATION') ?? false
+  })).toBe(true)
 
   await page.getByRole('button', { name: 'Kaydı durdur' }).click()
   await expect(page.getByText('Son kayıt', { exact: true })).toBeVisible()
@@ -69,6 +107,10 @@ test('session recorder starts, stops, and exports JSON', async ({ page }) => {
   await page.getByRole('button', { name: 'İndir', exact: true }).click()
   const download = await downloadPromise
   expect(download.suggestedFilename()).toMatch(/\.json$/)
+  const downloadPath = await download.path()
+  expect(downloadPath).not.toBeNull()
+  const report = JSON.parse(await readFile(downloadPath!, 'utf8')) as { session: { events: Array<{ type: string }> } }
+  expect(report.session.events.map((event) => event.type)).toContain('ORDERFLOW_LIQUIDATION')
 })
 
 test('order-flow chart layers survive theme changes and narrow resizes', async ({ page }) => {

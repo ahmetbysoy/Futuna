@@ -3,6 +3,7 @@ import { useApp } from '@/app/AppContext'
 import { useMarket } from '@/features/market/MarketContext'
 import { useDecision } from '@/features/signals/DecisionContext'
 import { readStorage, writeStorage } from '@/lib/storage'
+import { orderflowStore } from '@/features/orderflow/orderflowStore'
 
 export type SessionFormat = 'md' | 'html' | 'json'
 export interface SessionEvent {
@@ -45,8 +46,18 @@ function getInitial(): PersistedSessions {
   }
 }
 
-function makeEvent(type: string, data: SessionEvent['data']): SessionEvent {
-  return { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, timestamp: Date.now(), type, data }
+function makeEvent(type: string, data: SessionEvent['data'], timestamp = Date.now()): SessionEvent {
+  return { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, timestamp, type, data }
+}
+
+function eventSignature(timestamp: number, price: number | null | undefined, notional: number | null | undefined) {
+  return `${Math.trunc(timestamp)}|${price ?? ''}|${notional ?? ''}`
+}
+
+function addBoundedSignature(signatures: Set<string>, signature: string) {
+  if (signatures.has(signature)) return
+  if (signatures.size >= 500) signatures.delete(signatures.values().next().value as string)
+  signatures.add(signature)
 }
 
 export function SessionProvider({ children }: { children: ReactNode }) {
@@ -60,6 +71,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const historyRef = useRef<SessionRecord[]>(initial.history)
   const latestRef = useRef({ symbol, timeframe, mode, quote, flow, connection, decision })
   const lastEventIdsRef = useRef(new Set<string>())
+  const orderflowSignaturesRef = useRef(new Set<string>())
   const lastPriceSampleAtRef = useRef(initial.active?.events.filter((event) => event.type === 'PRICE_SAMPLE').at(-1)?.timestamp ?? initial.active?.startedAt ?? 0)
   const lastSignalRef = useRef<string | null>(null)
   latestRef.current = { symbol, timeframe, mode, quote, flow, connection, decision }
@@ -68,10 +80,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => writeStorage(STORAGE_KEY, { active, history }), [active, history])
 
-  const pushEvent = useCallback((type: string, data: SessionEvent['data']) => {
+  const pushEvent = useCallback((type: string, data: SessionEvent['data'], timestamp?: number) => {
     const current = activeRef.current
     if (!current) return
-    const next = { ...current, events: [...current.events, makeEvent(type, data)].slice(-2_000) }
+    const next = { ...current, events: [...current.events, makeEvent(type, data, timestamp)].slice(-2_000) }
     activeRef.current = next
     setActive(next)
   }, [])
@@ -169,11 +181,40 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, [symbol, active?.id, pushEvent])
 
+  useEffect(() => orderflowStore.subscribeEvents((event) => {
+    const current = activeRef.current
+    const latest = latestRef.current
+    const raw = orderflowStore.getRawState()
+    if (!current || latest.symbol !== current.symbol || raw.symbol !== current.symbol || event.ts < current.startedAt) return
+    if (lastEventIdsRef.current.has(event.id)) return
+    lastEventIdsRef.current.add(event.id)
+    if (event.type === 'WHALE' || event.type === 'LIQUIDATION') {
+      addBoundedSignature(orderflowSignaturesRef.current, eventSignature(event.ts, event.price, event.notional))
+    }
+    const type = `ORDERFLOW_${event.type.replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '')}`
+    pushEvent(type, {
+      source: 'orderflow',
+      sourceId: event.id,
+      eventType: event.type,
+      severity: event.sev,
+      marketMode: raw.mode,
+      side: event.side ?? null,
+      price: event.price ?? null,
+      notional: event.notional ?? null,
+      description: event.text,
+    }, event.ts)
+  }), [pushEvent])
+
   useEffect(() => {
     const current = activeRef.current
     if (!current || symbol !== current.symbol) return
     for (const item of [...flow.events].reverse()) {
       if (item.timestamp < current.startedAt || lastEventIdsRef.current.has(item.id)) continue
+      const signature = eventSignature(item.timestamp, item.price, item.notional)
+      if (orderflowSignaturesRef.current.has(signature)) {
+        lastEventIdsRef.current.add(item.id)
+        continue
+      }
       lastEventIdsRef.current.add(item.id)
       pushEvent(item.kind === 'liquidation' ? 'LIQUIDATION' : 'LARGE_TRADE', {
         symbol: item.symbol,
@@ -226,7 +267,7 @@ function serializeSession(record: SessionRecord, format: SessionFormat, includeP
     schemaVersion: 1,
     exportedAt: new Date().toISOString(),
     session: record,
-    limitations: ['Local browser session data only.', 'No exchange credentials or order actions are collected.', 'Market events are sampled public data, not a complete exchange event log.'],
+    limitations: ['Yalnızca bu tarayıcıdaki oturum verisi.', 'Borsa kimlik bilgisi veya emir işlemi toplanmaz.', 'Piyasa olayları örneklenmiş açık veridir; tam borsa olay günlüğü değildir.'],
   }
   if (format === 'json') return JSON.stringify(payload, null, 2)
   const duration = record.endedAt == null ? Math.max(0, Date.now() - record.startedAt) : record.endedAt - record.startedAt

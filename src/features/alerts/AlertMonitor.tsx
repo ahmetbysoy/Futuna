@@ -2,14 +2,41 @@ import { useEffect, useRef } from 'react'
 import { useApp } from '@/app/AppContext'
 import { useMarket } from '@/features/market/MarketContext'
 import { useDecision } from '@/features/signals/DecisionContext'
+import { orderflowStore } from '@/features/orderflow/orderflowStore'
+import type { FlowEventRecord } from '@/features/orderflow/types'
+import { formatCompact, formatPrice } from '@/lib/format'
+
+const EVENT_LABELS: Record<FlowEventRecord['type'], string> = {
+  WHALE: 'Büyük işlem',
+  SWEEP: 'Piyasa süpürmesi',
+  'DOM SWEEP': 'Emir defteri süpürmesi',
+  'ABSORPTION?': 'Olası absorpsiyon',
+  'DELTA BURST': 'Delta ivmesi',
+  'SPOOF?': 'Olası sahte emir',
+  FILLED: 'Duvar emirleri karşılandı',
+  ICEBERG: 'Gizli likidite yenilemesi',
+  LIQUIDATION: 'Tasfiye',
+  WALL_NEW: 'Yeni likidite duvarı',
+  WALL_GROW: 'Duvar büyüyor',
+  WALL_EATEN: 'Duvar tüketiliyor',
+  WALL_GONE: 'Duvar çekildi',
+}
+
+function sideLabel(side: FlowEventRecord['side']) {
+  if (side === 'buy' || side === 'bid') return 'Alış tarafı'
+  if (side === 'sell' || side === 'ask') return 'Satış tarafı'
+  if (side === 'long') return 'Long pozisyon'
+  if (side === 'short') return 'Short pozisyon'
+  return null
+}
 
 export function AlertMonitor() {
   const { settings } = useApp()
-  const { symbol, flow } = useMarket()
+  const { symbol, mode } = useMarket()
   const { decision } = useDecision()
   const initializedRef = useRef(false)
   const previousDirectionRef = useRef(decision.direction)
-  const lastFlowIdRef = useRef<string | null>(flow.events[0]?.id ?? null)
+  const lastFlowAlertAtRef = useRef(new Map<string, number>())
 
   useEffect(() => {
     if (!initializedRef.current) {
@@ -31,20 +58,37 @@ export function AlertMonitor() {
     }
   }, [decision.direction, decision.summary, decision.alignment, symbol, settings.alertsEnabled, settings.alertOnSignal, settings.alertVolume, settings.notificationsEnabled, settings.vibrationEnabled])
 
-  useEffect(() => {
-    const latest = flow.events[0]
-    if (!latest || latest.id === lastFlowIdRef.current) return
-    lastFlowIdRef.current = latest.id
+  useEffect(() => orderflowStore.subscribeEvents((event) => {
+    const raw = orderflowStore.getRawState()
+    if (raw.symbol !== symbol || raw.mode !== mode) return
     if (!initializedRef.current || !settings.alertsEnabled || !settings.alertOnHighFlow) return
+    if (event.type !== 'WHALE' && event.type !== 'LIQUIDATION' && event.sev !== 'high') return
+    const now = Date.now()
+    const alertGroup = event.type === 'LIQUIDATION' ? 'LIQUIDATION' : event.type === 'WHALE' ? 'WHALE' : 'HIGH_FLOW'
+    const alertKey = `${symbol}:${alertGroup}`
+    const previousAlertAt = lastFlowAlertAtRef.current.get(alertKey) ?? 0
+    if (now - previousAlertAt < 900) return
+    lastFlowAlertAtRef.current.set(alertKey, now)
+
+    const details = [sideLabel(event.side)]
+    if (event.notional != null) details.push(`${formatCompact(event.notional)} USDT`)
+    if (event.price != null) details.push(`Fiyat ${formatPrice(event.price)}`)
+    const severity = event.sev === 'high' ? 'Yüksek önem' : 'Eşik üstü olay'
+    const frequency = event.side === 'buy' || event.side === 'bid' || event.side === 'long'
+      ? 820
+      : event.side === 'sell' || event.side === 'ask' || event.side === 'short'
+        ? 500
+        : 660
+
     dispatchAlert(
-      `${latest.symbol} · ${latest.label}`,
-      `${latest.notional.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} USDT · fiyat ${latest.price.toLocaleString('tr-TR', { maximumFractionDigits: 4 })}`,
+      `${symbol} · ${EVENT_LABELS[event.type]}`,
+      `${severity}${details.length ? ` · ${details.join(' · ')}` : ''}`,
       settings.alertVolume,
       settings.notificationsEnabled,
       settings.vibrationEnabled,
-      latest.kind === 'buy' ? 820 : latest.kind === 'sell' ? 490 : 660,
+      frequency,
     )
-  }, [flow.events, settings.alertsEnabled, settings.alertOnHighFlow, settings.alertVolume, settings.notificationsEnabled, settings.vibrationEnabled])
+  }), [symbol, mode, settings.alertsEnabled, settings.alertOnHighFlow, settings.alertVolume, settings.notificationsEnabled, settings.vibrationEnabled])
 
   return null
 }
