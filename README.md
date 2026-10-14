@@ -36,6 +36,12 @@ sudo npx playwright install-deps chromium firefox webkit
 
 Dashboard ekran görüntüleri `artifacts/screenshots/` altında; görsel karşılaştırma baseline’ları `e2e/screenshots.spec.ts-snapshots/` altındadır.
 
+## Emir akışı
+
+Emir akışı katmanı salt okunur public piyasa verisiyle çalışır: 15 dakikalık sınırlı likidite ısı haritası, DOM/duvar katmanları, olay algılayıcıları, Scalping pusulası ve FlowMini içerir. Ayarlar ve hazır görünümler bu tarayıcıda saklanır. Oturum kaydı, uygun fiyat verisi olan emir akışı olayları için gecikmeli 10/30/60 saniye fiyat sonuçlarını da raporlar; bunlar tahmin veya yatırım tavsiyesi değildir.
+
+Uygulama Binance hesabına bağlanmaz, API anahtarı istemez ve emir göndermez. Playwright testleri deterministik fixtures kullanır; **canlı Binance davranışı doğrulanmış değildir**. Mimari, bellek sınırları, ölçüm semantiği ve kısıtlar için [`docs/ORDERFLOW.md`](docs/ORDERFLOW.md) ve [`docs/ORDERFLOW_IMPLEMENTATION_PLAN.md`](docs/ORDERFLOW_IMPLEMENTATION_PLAN.md) dosyalarına bakın.
+
 ## GitHub Pages
 
 `main` dalına her push, `.github/workflows/pages.yml` ile build ve GitHub Pages deploy’unu başlatır. Actions tamamlandıktan sonra site şu adreste yayınlanır:
