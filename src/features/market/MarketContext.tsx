@@ -308,6 +308,7 @@ export function MarketProvider({ children }: { children: ReactNode }) {
     if (mode === 'offline' || !symbols.some((item) => item.symbol === symbol)) return
     let active = true
     let socket: WebSocket | null = null
+    let connectionSequence = 0
     let reconnectTimer = 0
     let retry = 0
     let fallbackStarted = false
@@ -319,21 +320,25 @@ export function MarketProvider({ children }: { children: ReactNode }) {
 
     const connect = () => {
       if (!active || !isCurrent()) return
+      const currentConnection = ++connectionSequence
       setConnection(retry === 0 ? 'connecting' : 'reconnecting')
+      let currentSocket: WebSocket
       try {
-        socket = new WebSocket(wsUrl(targetMode, targetSymbol, timeframe))
+        currentSocket = new WebSocket(wsUrl(targetMode, targetSymbol, timeframe))
+        socket = currentSocket
       } catch {
         scheduleReconnect()
         return
       }
-      socket.onopen = () => {
-        if (!active || !isCurrent()) return
+      const isCurrentSocket = () => active && isCurrent() && connectionSequence === currentConnection && socket === currentSocket
+      currentSocket.onopen = () => {
+        if (!isCurrentSocket()) return
         retry = 0
         setConnection('live')
         setError(null)
       }
-      socket.onmessage = (event) => {
-        if (!active || !isCurrent()) return
+      currentSocket.onmessage = (event) => {
+        if (!isCurrentSocket()) return
         let packet: Record<string, unknown>
         try { packet = JSON.parse(String(event.data)) as Record<string, unknown> } catch { return }
         const message = (packet.data && typeof packet.data === 'object' ? packet.data : packet) as Record<string, unknown>
@@ -454,11 +459,13 @@ export function MarketProvider({ children }: { children: ReactNode }) {
           }))
         }
       }
-      socket.onerror = () => {
-        if (active && isCurrent()) setConnection('reconnecting')
+      currentSocket.onerror = () => {
+        if (isCurrentSocket()) setConnection('reconnecting')
       }
-      socket.onclose = () => {
-        if (active && isCurrent()) scheduleReconnect()
+      currentSocket.onclose = () => {
+        if (!isCurrentSocket()) return
+        socket = null
+        scheduleReconnect()
       }
     }
 
@@ -487,6 +494,7 @@ export function MarketProvider({ children }: { children: ReactNode }) {
     connect()
     return () => {
       active = false
+      connectionSequence += 1
       window.clearTimeout(reconnectTimer)
       if (socket && socket.readyState < WebSocket.CLOSING) socket.close(1000, 'symbol or timeframe changed')
     }

@@ -47,6 +47,11 @@ describe('OrderflowRuntime', () => {
     expect(store.getRawState().cvd.s10).toBe(500_000)
     expect(store.getRawState().compass.updatedAt).toBe(now + 100)
 
+    const nextGeneration = store.reset('ETHUSDT', 'futures', '1m')
+    expect(store.ingestTrade('BTCUSDT', generation, makeTrade(now + 200))).toBe(false)
+    expect(store.getRawState().events.length).toBe(0)
+    expect(store.isGenerationCurrent(nextGeneration, 'ETHUSDT')).toBe(true)
+
     const spotGeneration = store.reset('BTCUSDT', 'spot-fallback', '1m')
     expect(store.getRawState().cvd.s10).toBe(0)
     expect(store.ingestLiquidation('BTCUSDT', spotGeneration, {

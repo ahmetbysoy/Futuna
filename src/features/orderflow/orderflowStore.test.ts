@@ -127,6 +127,51 @@ describe('OrderflowStore', () => {
     expect(store.getSnapshot().heatFrameCount).toBe(900)
   })
 
+  it('trims oversized depth snapshots and diffs to the nearest 1,000 levels per side', () => {
+    vi.useFakeTimers()
+    const store = new OrderflowStore(clock)
+    const generation = store.reset('BTCUSDT', 'futures', '1m')
+    const bids = new Map(Array.from({ length: 1_801 }, (_, index) => [100 - index * 0.01, 1] as const))
+    const asks = new Map(Array.from({ length: 1_801 }, (_, index) => [100.1 + index * 0.01, 1] as const))
+
+    expect(store.ingestDepthSnapshot('BTCUSDT', generation, {
+      bids,
+      asks,
+      lastUpdateId: 10,
+      status: 'live',
+      updatedAt: now,
+    })).toBe(true)
+    expect(store.getRawState().bids.size).toBe(1_000)
+    expect(store.getRawState().asks.size).toBe(1_000)
+    expect(store.getRawState().bestBid).toBe(100)
+    expect(store.getRawState().bestAsk).toBe(100.1)
+
+    const newLevels = Array.from({ length: 2_000 }, (_, index) => [70 - index * 0.01, 1] as [number, number])
+    store.ingestDepthDiff('BTCUSDT', generation, {
+      bids: newLevels,
+      asks: [],
+      lastUpdateId: 11,
+      updatedAt: now + 1,
+    })
+    expect(store.getRawState().bids.size).toBe(1_000)
+    expect(store.getRawState().bestBid).toBe(100)
+  })
+
+  it('isolates event subscriber failures so later listeners still receive the event', () => {
+    vi.useFakeTimers()
+    const store = new OrderflowStore(clock)
+    const failingListener = vi.fn(() => { throw new Error('subscriber failure') })
+    const followingListener = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    store.subscribeEvents(failingListener)
+    store.subscribeEvents(followingListener)
+
+    expect(() => store.addFlowEvent(makeEvent(1))).not.toThrow()
+    expect(failingListener).toHaveBeenCalledOnce()
+    expect(followingListener).toHaveBeenCalledOnce()
+    expect(errorSpy).toHaveBeenCalledWith('Orderflow event subscriber failed', expect.any(Error))
+  })
+
   it('publishes a bounded per-symbol calibration snapshot', () => {
     vi.useFakeTimers()
     const store = new OrderflowStore(clock)

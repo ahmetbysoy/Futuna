@@ -117,6 +117,20 @@ describe('flow calibration', () => {
     calibrator.reset('XRPUSDT', 50_000, now)
     expect(calibrator.sampleCount()).toBe(0)
   })
+
+  it('keeps calibrating when browser storage throws on reads and writes', () => {
+    const storage: StorageLike = {
+      getItem: () => { throw new Error('storage unavailable') },
+      setItem: () => { throw new Error('storage quota exceeded') },
+    }
+    const calibrator = new FlowCalibrator(clock, storage)
+    calibrator.reset('BTCUSDT', 50_000, now)
+    for (let index = 0; index < 35; index += 1) calibrator.add(10_000 + index * 1_000, now + 60_001 + index)
+
+    expect(calibrator.isWarm()).toBe(true)
+    expect(calibrator.sampleCount()).toBe(35)
+    expect(calibrator.status().threshold).toBeGreaterThan(0)
+  })
 })
 
 describe('multi-window CVD and OBI', () => {

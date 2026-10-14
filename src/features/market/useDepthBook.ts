@@ -86,6 +86,9 @@ export function useDepthBook(
     let retry = 0
     let snapshotLoading = false
     let synced = false
+    let connectionGeneration = 0
+    let snapshotRequestId = 0
+    let fallbackRequestId = 0
     let snapshotBaseId: number | null = null
     let lastUpdateId = 0
     let pending: DepthUpdate[] = []
@@ -161,21 +164,24 @@ export function useDepthBook(
       }
     }
 
-    const clearVisibleBook = () => {
+    const clearVisibleBook = (status: DepthSyncStatus = 'syncing') => {
       bids = new Map()
       asks = new Map()
       lastUpdateId = 0
       if (publishTimer) window.clearTimeout(publishTimer)
       publishTimer = 0
-      setDepth({ ...EMPTY_DEPTH, depthStatus: 'syncing' })
-      notifyStatus('syncing', null, true)
+      setDepth({ ...EMPTY_DEPTH, depthStatus: status })
+      notifyStatus(status, null, true)
     }
 
-    const refreshRestFallback = async () => {
-      if (!active || synced) return
+    const refreshRestFallback = async (expectedConnection = connectionGeneration) => {
+      if (!active || synced || expectedConnection !== connectionGeneration) return
+      const requestId = ++fallbackRequestId
+      const expectedSnapshotRequest = snapshotRequestId
       try {
         const snapshot = await fetchDepthSnapshot(symbol, mode, controller.signal, 20)
-        if (!active || synced) return
+        if (!active || synced || expectedConnection !== connectionGeneration
+          || requestId !== fallbackRequestId || expectedSnapshotRequest !== snapshotRequestId) return
         const summary = summarizeDepth(snapshot)
         setDepth({
           bids: summary.bids,
@@ -189,21 +195,24 @@ export function useDepthBook(
         })
         notifyStatus('rest-fallback', snapshot.updatedAt, true)
       } catch {
-        if (active && !synced) {
+        if (active && !synced && expectedConnection === connectionGeneration
+          && requestId === fallbackRequestId && expectedSnapshotRequest === snapshotRequestId) {
           setDepth((current) => ({ ...current, depthStatus: 'unavailable' }))
           notifyStatus('unavailable', Date.now(), true)
         }
       }
     }
 
-    let loadSnapshot: () => Promise<void>
+    let loadSnapshot: (expectedConnection: number) => Promise<void>
     const requestResnapshot = () => {
       if (!active || snapshotLoading) return
       synced = false
       snapshotBaseId = null
       pending = []
+      if (snapshotRetryTimer) window.clearTimeout(snapshotRetryTimer)
+      snapshotRetryTimer = 0
       clearVisibleBook()
-      void loadSnapshot()
+      void loadSnapshot(connectionGeneration)
     }
 
     const processPending = () => {
@@ -257,16 +266,19 @@ export function useDepthBook(
       commitDepth('live')
     }
 
-    loadSnapshot = async () => {
-      if (!active || snapshotLoading || socket?.readyState !== WebSocket.OPEN) return
+    loadSnapshot = async (expectedConnection) => {
+      if (!active || snapshotLoading || expectedConnection !== connectionGeneration || socket?.readyState !== WebSocket.OPEN) return
       snapshotLoading = true
+      const requestId = ++snapshotRequestId
+      fallbackRequestId += 1
       synced = false
       snapshotBaseId = null
       setDepth((current) => ({ ...current, depthStatus: 'syncing' }))
       notifyStatus('syncing')
       try {
         const snapshot = await fetchDepthSnapshot(symbol, mode, controller.signal, 1_000)
-        if (!active) return
+        if (!active || expectedConnection !== connectionGeneration || requestId !== snapshotRequestId
+          || socket?.readyState !== WebSocket.OPEN) return
         bids = new Map(snapshot.bids.filter((level) => level.quantity > 0).map((level) => [level.price, level.quantity]))
         asks = new Map(snapshot.asks.filter((level) => level.quantity > 0).map((level) => [level.price, level.quantity]))
         lastUpdateId = snapshot.lastUpdateId
@@ -274,19 +286,21 @@ export function useDepthBook(
         notifySnapshot('syncing', snapshot.updatedAt)
         commitDepth('syncing')
       } catch {
-        if (active) {
-          void refreshRestFallback()
+        if (active && expectedConnection === connectionGeneration && requestId === snapshotRequestId) {
+          void refreshRestFallback(expectedConnection)
           if (socket?.readyState === WebSocket.OPEN) {
             if (snapshotRetryTimer) window.clearTimeout(snapshotRetryTimer)
             snapshotRetryTimer = window.setTimeout(() => {
               snapshotRetryTimer = 0
-              void loadSnapshot()
+              void loadSnapshot(expectedConnection)
             }, 5_000)
           }
         }
       } finally {
-        snapshotLoading = false
-        if (active) processPending()
+        if (requestId === snapshotRequestId) {
+          snapshotLoading = false
+          if (active && expectedConnection === connectionGeneration) processPending()
+        }
       }
     }
 
@@ -357,45 +371,59 @@ export function useDepthBook(
 
     const connect = () => {
       if (!active) return
-      setDepth((current) => ({ ...current, depthStatus: 'connecting' }))
-      notifyStatus('connecting', null, true)
+      const currentConnection = ++connectionGeneration
+      snapshotRequestId += 1
+      fallbackRequestId += 1
+      snapshotLoading = false
+      synced = false
+      snapshotBaseId = null
+      pending = []
+      clearVisibleBook('connecting')
+
+      let currentSocket: WebSocket
       try {
-        socket = new WebSocket(depthWsUrl(mode, symbol))
+        currentSocket = new WebSocket(depthWsUrl(mode, symbol))
+        socket = currentSocket
       } catch {
-        setDepth((current) => ({ ...current, depthStatus: 'connecting' }))
-        void refreshRestFallback()
+        socket = null
+        void refreshRestFallback(currentConnection)
         scheduleReconnect()
         return
       }
 
-      socket.onopen = () => {
-        if (!active) return
+      const isCurrentSocket = () => active && connectionGeneration === currentConnection && socket === currentSocket
+      currentSocket.onopen = () => {
+        if (!isCurrentSocket()) return
         retry = 0
         pending = []
         setDepth((current) => ({ ...current, depthStatus: 'syncing' }))
         notifyStatus('syncing')
         if (snapshotRetryTimer) window.clearTimeout(snapshotRetryTimer)
         snapshotRetryTimer = 0
-        void loadSnapshot()
+        void loadSnapshot(currentConnection)
       }
-      socket.onmessage = (event) => {
-        if (!active || typeof event.data !== 'string') return
+      currentSocket.onmessage = (event) => {
+        if (!isCurrentSocket() || typeof event.data !== 'string') return
         const update = parseDepthUpdate(event.data)
         if (update) handleDepthUpdate(update)
       }
-      socket.onerror = () => {
-        if (active) socket?.close()
+      currentSocket.onerror = () => {
+        if (isCurrentSocket()) currentSocket.close()
       }
-      socket.onclose = () => {
-        if (!active) return
+      currentSocket.onclose = () => {
+        if (!isCurrentSocket()) return
+        connectionGeneration += 1
+        snapshotRequestId += 1
+        fallbackRequestId += 1
+        snapshotLoading = false
+        socket = null
         synced = false
         snapshotBaseId = null
         pending = []
         if (snapshotRetryTimer) window.clearTimeout(snapshotRetryTimer)
         snapshotRetryTimer = 0
-        setDepth((current) => ({ ...current, depthStatus: 'connecting' }))
-        notifyStatus('connecting', null, true)
-        void refreshRestFallback()
+        clearVisibleBook('connecting')
+        void refreshRestFallback(connectionGeneration)
         scheduleReconnect()
       }
     }

@@ -213,10 +213,13 @@ export class DepthPrimitive implements ISeriesPrimitive<Time> {
     target.useMediaCoordinateSpace(({ context, mediaSize }) => {
       if (mediaSize.width <= 0 || mediaSize.height <= 0) return
       context.save()
-      if (layer === 'heatmap') this.drawHeatmap(context, chart, series, raw, mediaSize.width, mediaSize.height)
-      else if (layer === 'depth') this.drawDepthOverlay(context, series, raw, mediaSize.width, mediaSize.height)
-      else this.drawLiveWalls(context, series, raw, mediaSize.width, mediaSize.height)
-      context.restore()
+      try {
+        if (layer === 'heatmap') this.drawHeatmap(context, chart, series, raw, mediaSize.width, mediaSize.height)
+        else if (layer === 'depth') this.drawDepthOverlay(context, series, raw, mediaSize.width, mediaSize.height)
+        else this.drawLiveWalls(context, series, raw, mediaSize.width, mediaSize.height)
+      } finally {
+        context.restore()
+      }
     })
   }
 

@@ -4,6 +4,8 @@ import { useMarket } from '@/features/market/MarketContext'
 import { useDecision } from '@/features/signals/DecisionContext'
 import { readStorage, writeStorage } from '@/lib/storage'
 import { orderflowStore } from '@/features/orderflow/orderflowStore'
+import type { FlowEventRecord } from '@/features/orderflow/types'
+import { FLOW_OUTCOME_WINDOWS_SECONDS, expectedFlowDirection, isFlowEventType, measureFlowOutcome, type FlowOutcomeDirection } from './outcomes'
 
 export type SessionFormat = 'md' | 'html' | 'json'
 export interface SessionEvent {
@@ -12,6 +14,17 @@ export interface SessionEvent {
   type: string
   data: Record<string, string | number | boolean | null>
 }
+interface PendingFlowOutcome {
+  sessionId: string
+  sourceId: string
+  eventType: FlowEventRecord['type']
+  symbol: string
+  referencePrice: number
+  expectedDirection: FlowOutcomeDirection | null
+  observedAt: number
+  nextWindowIndex: number
+}
+
 export interface SessionRecord {
   id: string
   symbol: string
@@ -36,6 +49,7 @@ interface SessionContextValue {
 }
 
 const STORAGE_KEY = 'fs.session-recorder.v1'
+const MAX_PENDING_FLOW_OUTCOMES = 100
 const SessionContext = createContext<SessionContextValue | null>(null)
 
 function getInitial(): PersistedSessions {
@@ -54,10 +68,84 @@ function eventSignature(timestamp: number, price: number | null | undefined, not
   return `${Math.trunc(timestamp)}|${price ?? ''}|${notional ?? ''}`
 }
 
-function addBoundedSignature(signatures: Set<string>, signature: string) {
+function addBoundedSignature(signatures: Set<string>, signature: string, limit = 500) {
   if (signatures.has(signature)) return
-  if (signatures.size >= 500) signatures.delete(signatures.values().next().value as string)
+  if (signatures.size >= limit) signatures.delete(signatures.values().next().value as string)
   signatures.add(signature)
+}
+
+function makeFlowOutcomeEvent(
+  pending: PendingFlowOutcome,
+  windowSeconds: number,
+  observedPrice: number | null,
+  observedAt: number,
+  status: string,
+  quoteUpdatedAt: number | null,
+) {
+  const measured = measureFlowOutcome(pending.referencePrice, observedPrice, pending.expectedDirection)
+  return makeEvent('ORDERFLOW_OUTCOME', {
+    source: 'orderflow',
+    sourceId: pending.sourceId,
+    eventType: pending.eventType,
+    symbol: pending.symbol,
+    windowSeconds,
+    observedAfterSeconds: Math.max(0, Math.round((observedAt - pending.observedAt) / 1_000)),
+    referencePrice: pending.referencePrice,
+    observedPrice,
+    quoteUpdatedAt,
+    returnPct: measured.returnPct,
+    expectedDirection: pending.expectedDirection,
+    directionCorrect: measured.directionCorrect,
+    status,
+  }, observedAt)
+}
+
+function restorePendingFlowOutcomes(record: SessionRecord | null) {
+  if (!record) return []
+  const completed = new Map<string, Set<number>>()
+  const candidates = new Map<string, PendingFlowOutcome>()
+
+  for (const event of record.events) {
+    const sourceId = event.data.sourceId
+    if (typeof sourceId !== 'string') continue
+    if (event.type === 'ORDERFLOW_OUTCOME') {
+      const windowSeconds = event.data.windowSeconds
+      if (typeof windowSeconds !== 'number') continue
+      const windows = completed.get(sourceId) ?? new Set<number>()
+      windows.add(windowSeconds)
+      completed.set(sourceId, windows)
+      continue
+    }
+    if (!event.type.startsWith('ORDERFLOW_')) continue
+    const eventType = event.data.eventType
+    const referencePrice = event.data.outcomeReferencePrice ?? event.data.price
+    const capturedAt = event.data.capturedAt
+    if (!isFlowEventType(eventType) || typeof referencePrice !== 'number' || referencePrice <= 0) continue
+    const expectedDirection = event.data.expectedDirection === 'LONG' || event.data.expectedDirection === 'SHORT'
+      ? event.data.expectedDirection
+      : null
+    candidates.set(sourceId, {
+      sessionId: record.id,
+      sourceId,
+      eventType,
+      symbol: record.symbol,
+      referencePrice,
+      expectedDirection,
+      observedAt: typeof capturedAt === 'number' ? capturedAt : event.timestamp,
+      nextWindowIndex: 0,
+    })
+  }
+
+  const pending: PendingFlowOutcome[] = []
+  for (const candidate of candidates.values()) {
+    const windows = completed.get(candidate.sourceId)
+    while (candidate.nextWindowIndex < FLOW_OUTCOME_WINDOWS_SECONDS.length
+      && windows?.has(FLOW_OUTCOME_WINDOWS_SECONDS[candidate.nextWindowIndex])) {
+      candidate.nextWindowIndex += 1
+    }
+    if (candidate.nextWindowIndex < FLOW_OUTCOME_WINDOWS_SECONDS.length) pending.push(candidate)
+  }
+  return pending.slice(-MAX_PENDING_FLOW_OUTCOMES)
 }
 
 export function SessionProvider({ children }: { children: ReactNode }) {
@@ -65,6 +153,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const { decision } = useDecision()
   const { settings, showToast } = useApp()
   const initial = useMemo(getInitial, [])
+  const initialPendingOutcomes = useMemo(() => restorePendingFlowOutcomes(initial.active), [initial.active])
   const [active, setActive] = useState<SessionRecord | null>(initial.active)
   const [history, setHistory] = useState<SessionRecord[]>(initial.history)
   const activeRef = useRef<SessionRecord | null>(initial.active)
@@ -72,6 +161,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const latestRef = useRef({ symbol, timeframe, mode, quote, flow, connection, decision })
   const lastEventIdsRef = useRef(new Set<string>())
   const orderflowSignaturesRef = useRef(new Set<string>())
+  const pendingOutcomesRef = useRef<PendingFlowOutcome[]>(initialPendingOutcomes)
   const lastPriceSampleAtRef = useRef(initial.active?.events.filter((event) => event.type === 'PRICE_SAMPLE').at(-1)?.timestamp ?? initial.active?.startedAt ?? 0)
   const lastSignalRef = useRef<string | null>(null)
   latestRef.current = { symbol, timeframe, mode, quote, flow, connection, decision }
@@ -94,10 +184,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const latest = latestRef.current
     const finalPrice = latest.symbol === current.symbol && latest.quote.lastPrice != null ? latest.quote.lastPrice : current.lastPrice
     const endedAt = Date.now()
+    const incompleteOutcomes = pendingOutcomesRef.current
+      .filter((pending) => pending.sessionId === current.id)
+      .flatMap((pending) => FLOW_OUTCOME_WINDOWS_SECONDS.slice(pending.nextWindowIndex)
+        .map((windowSeconds) => makeFlowOutcomeEvent(pending, windowSeconds, null, endedAt, 'session-ended', null)))
     const event = makeEvent('SESSION_END', { reason, endPrice: finalPrice, durationSeconds: Math.round((endedAt - current.startedAt) / 1_000) })
-    const closed: SessionRecord = { ...current, lastPrice: finalPrice, endPrice: finalPrice, endedAt, endReason: reason, events: [...current.events, event].slice(-2_000) }
+    const closed: SessionRecord = {
+      ...current,
+      lastPrice: finalPrice,
+      endPrice: finalPrice,
+      endedAt,
+      endReason: reason,
+      events: [...current.events, ...incompleteOutcomes, event].slice(-2_000),
+    }
     const nextHistory = [closed, ...historyRef.current.filter((item) => item.id !== closed.id)].slice(0, 10)
     activeRef.current = null
+    lastEventIdsRef.current.clear()
+    orderflowSignaturesRef.current.clear()
+    pendingOutcomesRef.current = pendingOutcomesRef.current.filter((pending) => pending.sessionId !== current.id)
     historyRef.current = nextHistory
     setActive(null)
     setHistory(nextHistory)
@@ -132,6 +236,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     activeRef.current = record
     setActive(record)
     lastEventIdsRef.current.clear()
+    orderflowSignaturesRef.current.clear()
+    pendingOutcomesRef.current = []
     lastSignalRef.current = null
     lastPriceSampleAtRef.current = startedAt
     showToast('Oturum kaydı başladı. Veriler yalnızca bu cihazda saklanır.', 'success')
@@ -156,6 +262,27 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return
       }
       let next = current
+      const outcomeEvents: SessionEvent[] = []
+      const pendingOutcomes: PendingFlowOutcome[] = []
+      for (const pending of pendingOutcomesRef.current) {
+        if (pending.sessionId !== current.id) continue
+        while (pending.nextWindowIndex < FLOW_OUTCOME_WINDOWS_SECONDS.length) {
+          const windowSeconds = FLOW_OUTCOME_WINDOWS_SECONDS[pending.nextWindowIndex]
+          if (now - pending.observedAt < windowSeconds * 1_000) break
+          const quoteUpdatedAt = latest.quote.updatedAt
+          const sameSymbol = latest.symbol === pending.symbol && current.symbol === pending.symbol
+          const freshQuote = quoteUpdatedAt != null && now >= quoteUpdatedAt && now - quoteUpdatedAt <= 30_000
+          const observedPrice = sameSymbol && freshQuote && latest.quote.lastPrice != null && Number.isFinite(latest.quote.lastPrice)
+            ? latest.quote.lastPrice
+            : null
+          const status = !sameSymbol ? 'symbol-unavailable' : observedPrice == null ? 'price-unavailable' : 'complete'
+          outcomeEvents.push(makeFlowOutcomeEvent(pending, windowSeconds, observedPrice, now, status, quoteUpdatedAt))
+          pending.nextWindowIndex += 1
+        }
+        if (pending.nextWindowIndex < FLOW_OUTCOME_WINDOWS_SECONDS.length) pendingOutcomes.push(pending)
+      }
+      pendingOutcomesRef.current = pendingOutcomes
+      if (outcomeEvents.length > 0) next = { ...next, events: [...next.events, ...outcomeEvents].slice(-2_000) }
       if (now - lastPriceSampleAtRef.current >= 15_000 && latest.symbol === current.symbol && latest.quote.lastPrice != null) {
         const priceEvent = makeEvent('PRICE_SAMPLE', { price: latest.quote.lastPrice, connection: latest.connection })
         next = { ...next, lastPrice: latest.quote.lastPrice, events: [...next.events, priceEvent].slice(-2_000) }
@@ -175,7 +302,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (symbol !== current.symbol) {
       const key = `symbol:${symbol}`
       if (!lastEventIdsRef.current.has(key)) {
-        lastEventIdsRef.current.add(key)
+        addBoundedSignature(lastEventIdsRef.current, key, 2_500)
         pushEvent('SYMBOL_CHANGED', { from: current.symbol, to: symbol, note: 'Recorder remains attached to the original symbol.' })
       }
     }
@@ -187,11 +314,29 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const raw = orderflowStore.getRawState()
     if (!current || latest.symbol !== current.symbol || raw.symbol !== current.symbol || event.ts < current.startedAt) return
     if (lastEventIdsRef.current.has(event.id)) return
-    lastEventIdsRef.current.add(event.id)
+    addBoundedSignature(lastEventIdsRef.current, event.id, 2_500)
     if (event.type === 'WHALE' || event.type === 'LIQUIDATION') {
       addBoundedSignature(orderflowSignaturesRef.current, eventSignature(event.ts, event.price, event.notional))
     }
     const type = `ORDERFLOW_${event.type.replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '')}`
+    const observedAt = Date.now()
+    const referencePrice = event.source === 'depth'
+      ? latest.quote.lastPrice ?? event.price
+      : event.price ?? latest.quote.lastPrice
+    const expectedDirection = expectedFlowDirection(event)
+    if (referencePrice != null && Number.isFinite(referencePrice) && referencePrice > 0) {
+      if (pendingOutcomesRef.current.length >= MAX_PENDING_FLOW_OUTCOMES) pendingOutcomesRef.current.shift()
+      pendingOutcomesRef.current.push({
+        sessionId: current.id,
+        sourceId: event.id,
+        eventType: event.type,
+        symbol: current.symbol,
+        referencePrice,
+        expectedDirection,
+        observedAt,
+        nextWindowIndex: 0,
+      })
+    }
     pushEvent(type, {
       source: 'orderflow',
       sourceId: event.id,
@@ -202,6 +347,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       price: event.price ?? null,
       notional: event.notional ?? null,
       description: event.text,
+      capturedAt: observedAt,
+      outcomeReferencePrice: referencePrice != null && Number.isFinite(referencePrice) && referencePrice > 0 ? referencePrice : null,
+      expectedDirection,
     }, event.ts)
   }), [pushEvent])
 
@@ -212,10 +360,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (item.timestamp < current.startedAt || lastEventIdsRef.current.has(item.id)) continue
       const signature = eventSignature(item.timestamp, item.price, item.notional)
       if (orderflowSignaturesRef.current.has(signature)) {
-        lastEventIdsRef.current.add(item.id)
+        addBoundedSignature(lastEventIdsRef.current, item.id, 2_500)
         continue
       }
-      lastEventIdsRef.current.add(item.id)
+      addBoundedSignature(lastEventIdsRef.current, item.id, 2_500)
       pushEvent(item.kind === 'liquidation' ? 'LIQUIDATION' : 'LARGE_TRADE', {
         symbol: item.symbol,
         side: item.kind,

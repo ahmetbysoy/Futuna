@@ -24,6 +24,8 @@ const MAX_EVENTS = 40
 const MAX_HEAT_FRAMES = 900
 const MAX_WALL_AGES = 2_000
 const MAX_WALLS = 20
+const MAX_BOOK_LEVELS = 1_500
+const BOOK_LEVELS_AFTER_TRIM = 1_000
 const TRADE_RETENTION_MS = 10 * 60_000
 const LIQUIDATION_RETENTION_MS = 10 * 60_000
 const HEAT_RETENTION_SEC = 900
@@ -419,8 +421,8 @@ export class OrderflowStore {
     const state = this.state
     state.bids.clear()
     state.asks.clear()
-    this.copyDepthSide(update.bids, state.bids)
-    this.copyDepthSide(update.asks, state.asks)
+    this.copyDepthSide(update.bids, state.bids, 'bid')
+    this.copyDepthSide(update.asks, state.asks, 'ask')
     state.lastUpdateId = update.lastUpdateId
     state.depthStatus = update.status
     state.depthSynced = update.status === 'live'
@@ -433,8 +435,8 @@ export class OrderflowStore {
 
   ingestDepthDiff(symbol: string, generation: number, update: DepthBookDiffUpdate) {
     if (!this.isGenerationCurrent(generation, symbol) || !this.state.depthSynced) return false
-    this.applyDepthSide(update.bids, this.state.bids)
-    this.applyDepthSide(update.asks, this.state.asks)
+    this.applyDepthSide(update.bids, this.state.bids, 'bid')
+    this.applyDepthSide(update.asks, this.state.asks, 'ask')
     this.state.lastUpdateId = update.lastUpdateId
     this.state.depthStatus = 'live'
     this.state.depthSynced = true
@@ -515,7 +517,13 @@ export class OrderflowStore {
       }
     }
     this.changed()
-    for (const listener of Array.from(this.eventListeners)) listener(record)
+    for (const listener of Array.from(this.eventListeners)) {
+      try {
+        listener(record)
+      } catch (error) {
+        console.error('Orderflow event subscriber failed', error)
+      }
+    }
     return record
   }
 
@@ -611,18 +619,29 @@ export class OrderflowStore {
     this.changed()
   }
 
-  private copyDepthSide(source: ReadonlyMap<number, number>, target: Map<number, number>) {
+  private copyDepthSide(source: ReadonlyMap<number, number>, target: Map<number, number>, side: 'bid' | 'ask') {
     for (const [price, quantity] of source) {
       if (validPositive(price) && validPositive(quantity)) target.set(price, quantity)
     }
+    this.trimDepthSide(target, side)
   }
 
-  private applyDepthSide(updates: readonly [number, number][], target: Map<number, number>) {
+  private applyDepthSide(updates: readonly [number, number][], target: Map<number, number>, side: 'bid' | 'ask') {
     for (const [price, quantity] of updates) {
       if (!validPositive(price) || !Number.isFinite(quantity) || quantity < 0) continue
       if (quantity === 0) target.delete(price)
       else target.set(price, quantity)
     }
+    this.trimDepthSide(target, side)
+  }
+
+  private trimDepthSide(book: Map<number, number>, side: 'bid' | 'ask') {
+    if (book.size <= MAX_BOOK_LEVELS) return
+    const keep = Array.from(book.entries())
+      .sort(([left], [right]) => side === 'bid' ? right - left : left - right)
+      .slice(0, BOOK_LEVELS_AFTER_TRIM)
+    book.clear()
+    for (const [price, quantity] of keep) book.set(price, quantity)
   }
 
   private refreshTopOfBook(state: MutableOrderflowState) {
@@ -669,7 +688,13 @@ export class OrderflowStore {
   }
 
   private notifyRawListeners() {
-    for (const listener of Array.from(this.rawListeners)) listener()
+    for (const listener of Array.from(this.rawListeners)) {
+      try {
+        listener()
+      } catch (error) {
+        console.error('Orderflow raw subscriber failed', error)
+      }
+    }
   }
 
   private scheduleSnapshot() {
@@ -726,7 +751,13 @@ export class OrderflowStore {
       heatFrameCount: state.heatFrames.length,
     }
     this.lastSnapshotAt = this.clock.now()
-    for (const listener of Array.from(this.listeners)) listener()
+    for (const listener of Array.from(this.listeners)) {
+      try {
+        listener()
+      } catch (error) {
+        console.error('Orderflow snapshot subscriber failed', error)
+      }
+    }
   }
 }
 

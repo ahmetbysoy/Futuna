@@ -35,7 +35,7 @@ export function SessionRecorderCard() {
   return (
     <Card className="session-card">
       <CardHeader className="session-card__header">
-        <div><span className="eyebrow">YEREL OLAY KAYDI</span><CardTitle>Oturum kaydedici</CardTitle><p className="card-subtitle">{symbol} fiyat örnekleri, kural sinyalleri ve emir akışı olayları.</p></div>
+        <div><span className="eyebrow">YEREL OLAY KAYDI</span><CardTitle>Oturum kaydedici</CardTitle><p className="card-subtitle">{symbol} fiyat örnekleri, kural sinyalleri ve emir akışı olayları; uygun fiyat verisi varsa 10/30/60 sn sonuçları.</p></div>
         {active && <Badge tone="positive"><span className="recording-dot" />Kaydediliyor</Badge>}
       </CardHeader>
       <CardBody>
@@ -51,7 +51,7 @@ export function SessionRecorderCard() {
           <div className="session-current__top"><strong>{latest.symbol}</strong><span>{active ? 'Aktif oturum' : 'Son kayıt'}</span></div>
           <div className="session-current__grid"><div><span>Süre</span><strong>{Math.floor(elapsed / 60_000)} dk {Math.floor((elapsed % 60_000) / 1_000)} sn</strong></div><div><span>Olay</span><strong>{latest.events.length}</strong></div><div><span>Fiyat değişimi</span><strong className={netPct == null ? '' : netPct >= 0 ? 'tone-positive' : 'tone-negative'}>{netPct == null ? '—' : `${netPct >= 0 ? '+' : ''}${netPct.toFixed(2)}%`}</strong></div><div><span>Son fiyat</span><strong className="mono">{formatPrice(liveSessionPrice)}</strong></div></div>
           <small>Başlangıç {formatDateTime(latest.startedAt)} · Otomatik süre sınırı {latest.maxMinutes} dk</small>
-        </div> : <div className="session-empty">Henüz kayıt yok. Başlatınca 15 saniyede bir fiyat örneği ve yeni sinyal/emir akışı olayları eklenir.</div>}
+        </div> : <div className="session-empty">Henüz kayıt yok. Başlatınca 15 saniyede bir fiyat örneği, emir akışı olayları ve fiyatı bulunan olaylar için 10/30/60 saniyelik gecikmeli sonuçlar eklenir.</div>}
         {history.length > 0 && <div className="session-history"><div className="session-history__heading"><strong>Önceki oturumlar</strong><Button variant="ghost" size="sm" onClick={() => { if (window.confirm('Oturum geçmişi bu cihazdan silinsin mi?')) { clearHistory(); showToast('Oturum geçmişi silindi.', 'success') } }}><Trash size={14} aria-hidden="true" />Geçmişi sil</Button></div><ul>{history.slice(0, 4).map((item) => <li key={item.id}><span><strong>{item.symbol}</strong><small>{formatDateTime(item.startedAt)} · {item.events.length} olay</small></span><span>{item.endPrice == null ? '—' : formatPrice(item.endPrice)}</span></li>)}</ul></div>}
       </CardBody>
     </Card>

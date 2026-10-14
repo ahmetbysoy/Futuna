@@ -49,6 +49,8 @@ export async function mockMarketApi(page: Page) {
         super()
         this.url = String(url)
         window.addEventListener('mock-orderflow-liquidation', this.handleMockLiquidation)
+        window.addEventListener('mock-orderflow-depth-disconnect', this.handleMockDepthDisconnect)
+        window.addEventListener('mock-orderflow-depth-gap', this.handleMockDepthGap)
         window.setTimeout(() => this.open(), 0)
       }
 
@@ -58,6 +60,8 @@ export async function mockMarketApi(page: Page) {
         if (this.readyState >= MockWebSocket.CLOSING) return
         this.readyState = MockWebSocket.CLOSED
         window.removeEventListener('mock-orderflow-liquidation', this.handleMockLiquidation)
+        window.removeEventListener('mock-orderflow-depth-disconnect', this.handleMockDepthDisconnect)
+        window.removeEventListener('mock-orderflow-depth-gap', this.handleMockDepthGap)
         const event = new CloseEvent('close', { code, reason, wasClean: true })
         this.dispatchEvent(event)
         this.onclose?.(event)
@@ -94,6 +98,23 @@ export async function mockMarketApi(page: Page) {
           e: 'forceOrder', s: 'BTCUSDT', E: timestamp,
           o: { s: 'BTCUSDT', S: 'BUY', o: 'MARKET', f: 'IOC', q: '6', ap: '66900.25', X: 'FILLED', l: '6', z: '6', T: timestamp },
         })
+      }
+
+      private readonly handleMockDepthDisconnect = () => {
+        if (!this.url.includes('@depth') || this.readyState !== MockWebSocket.OPEN) return
+        this.close(4001, 'deterministic depth disconnect')
+      }
+
+      private readonly handleMockDepthGap = () => {
+        if (!this.url.includes('@depth') || this.readyState !== MockWebSocket.OPEN) return
+        this.emitDepth({
+          e: 'depthUpdate', s: 'BTCUSDT', U: 800_010, u: 800_011, pu: 800_010,
+          b: [['66900', '1.1']], a: [['66901', '1.0']],
+        })
+        window.setTimeout(() => this.emitDepth({
+          e: 'depthUpdate', s: 'BTCUSDT', U: 800_000, u: 800_001, pu: 800_000,
+          b: [['66900', '1.25']], a: [['66901', '1.2']],
+        }), 50)
       }
 
       private emitMessage(payload: Record<string, unknown>) {

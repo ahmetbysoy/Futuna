@@ -6,6 +6,8 @@ import { orderflowStore } from '@/features/orderflow/orderflowStore'
 import type { FlowEventRecord } from '@/features/orderflow/types'
 import { formatCompact, formatPrice } from '@/lib/format'
 
+const MAX_FLOW_ALERT_COOLDOWNS = 60
+
 const EVENT_LABELS: Record<FlowEventRecord['type'], string> = {
   WHALE: 'Büyük işlem',
   SWEEP: 'Piyasa süpürmesi',
@@ -68,7 +70,13 @@ export function AlertMonitor() {
     const alertKey = `${symbol}:${alertGroup}`
     const previousAlertAt = lastFlowAlertAtRef.current.get(alertKey) ?? 0
     if (now - previousAlertAt < 900) return
+    lastFlowAlertAtRef.current.delete(alertKey)
     lastFlowAlertAtRef.current.set(alertKey, now)
+    while (lastFlowAlertAtRef.current.size > MAX_FLOW_ALERT_COOLDOWNS) {
+      const oldestKey = lastFlowAlertAtRef.current.keys().next().value as string | undefined
+      if (oldestKey == null) break
+      lastFlowAlertAtRef.current.delete(oldestKey)
+    }
 
     const details = [sideLabel(event.side)]
     if (event.notional != null) details.push(`${formatCompact(event.notional)} USDT`)
@@ -110,9 +118,14 @@ function dispatchAlert(title: string, body: string, volume: number, notify: bool
       oscillator.onended = () => void context.close()
     } catch { /* Ses yoksa diğer bildirim kanalları çalışmaya devam eder. */ }
   }
-  if (vibrate && typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([90, 45, 90])
-  if (notify && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-    const notification = new Notification(title, { body, tag: 'futures-scanner-alert' })
-    notification.onclick = () => { window.focus(); notification.close() }
+  if (vibrate && typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+    try { navigator.vibrate?.([90, 45, 90]) } catch { /* Haptics are optional and browser-controlled. */ }
+  }
+  if (notify && typeof Notification !== 'undefined') {
+    try {
+      if (Notification.permission !== 'granted') return
+      const notification = new Notification(title, { body, tag: 'futures-scanner-alert' })
+      notification.onclick = () => { window.focus(); notification.close() }
+    } catch { /* Notifications can be blocked after permission changes or in unsupported contexts. */ }
   }
 }
