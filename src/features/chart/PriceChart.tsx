@@ -334,6 +334,8 @@ export function PriceChart({ candles, liveCandle, symbol, timeframe, marketMode,
     vwapSeriesRef.current?.applyOptions({ visible: showVwap })
     sarSeriesRef.current?.applyOptions({ visible: showSar })
     volumeSeriesRef.current?.applyOptions({ visible: showVolume })
+    // Restore vertical room to candles when volume bars are hidden.
+    chartRef.current?.priceScale('right').applyOptions({ scaleMargins: { top: 0.08, bottom: showVolume ? 0.21 : 0.07 } })
   }, [showEma, showVolume, showBollinger, showVwap, showSar, candles.length])
 
   const resetView = () => chartRef.current?.timeScale().fitContent()

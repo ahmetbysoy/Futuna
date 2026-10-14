@@ -23,6 +23,11 @@ export function AppHeader() {
         <span>Futures<span className="brand-dot">.</span></span>
       </div>
       <SymbolPicker />
+      <span
+        className={`connection-dot connection-dot--${connection} topbar__conn-dot`}
+        role="img"
+        aria-label={connection === 'live' ? 'Canlı akış açık' : connection === 'offline' ? 'Akış çevrimdışı' : connection === 'reconnecting' ? 'Akış yeniden bağlanıyor' : 'Akış bağlanıyor'}
+      />
       <div className="topbar__right">
         <div className="topbar__status">
           <ProviderBadge mode={mode} />

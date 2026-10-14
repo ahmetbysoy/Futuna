@@ -909,3 +909,71 @@ kbd { display: inline-grid; min-width: 19px; height: 19px; place-items: center; 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Mobile chart-first market view (<=860px) */
+.topbar__conn-dot { display: none; flex: none; }
+
+@media (max-width: 860px) {
+  .topbar__conn-dot { display: block; }
+
+  /* Visually hide the repeated heading while retaining its accessible h1. */
+  .page--dashboard > .page-heading { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  .page--dashboard { gap: 10px; margin-top: -6px; }
+
+  /* Order: notice, chart, summary, decision strip, signal/compass, flow panels. */
+  .page--dashboard > .dashboard-grid { display: contents; }
+  .page--dashboard .provider-notice { order: -20; }
+  .page--dashboard .dashboard-grid__primary { order: -10; }
+  .page--dashboard > .stats-grid { order: -9; }
+  .page--dashboard > .orderflow-decision-strip { order: -8; }
+  .page--dashboard .dashboard-grid__side { order: -7; position: static; }
+
+  /* Compact chart chrome and horizontally scrollable timeframes. */
+  .page--dashboard .chart-card__header { align-items: center; padding: 10px 12px 0; }
+  .page--dashboard .chart-card .section-icon,
+  .page--dashboard .chart-card .chart-title { display: none; }
+  .page--dashboard .chart-subtitle { margin: 0; }
+  .page--dashboard .timeframe-row { padding: 8px 12px 6px; overflow-x: auto; scrollbar-width: none; }
+  .page--dashboard .timeframe-row::-webkit-scrollbar { display: none; }
+  .page--dashboard .timeframe-row .ui-button { flex: none; }
+  .page--dashboard .chart-setting-hint { display: none; }
+  .page--dashboard .chart-toolbar { min-height: 30px; padding: 0 8px 4px; }
+  .page--dashboard .chart-legend { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .page--dashboard .chart-legend::-webkit-scrollbar { display: none; }
+  .page--dashboard .legend-item--direction { display: none; }
+
+  /* Let the chart use the available viewport height. */
+  .page--dashboard .chart-visual {
+    height: clamp(340px, calc(100dvh - var(--topbar-height) - var(--nav-height) - env(safe-area-inset-bottom) - 176px), 720px);
+    min-height: 280px;
+    border-radius: 0;
+  }
+  .page--dashboard .chart-shell { padding: 0 0 6px; }
+  .page--dashboard .chart-data-details, .page--dashboard .chart-attribution { margin-right: 10px; margin-left: 10px; }
+
+  /* Market summary: one horizontally scrollable row. */
+  .page--dashboard > .stats-grid { display: flex; gap: 8px; margin: 0 -12px; padding: 0 12px 2px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; }
+  .page--dashboard > .stats-grid::-webkit-scrollbar { display: none; }
+  .page--dashboard .stats-grid .metric-card { flex: 0 0 116px; padding: 8px 10px; scroll-snap-align: start; }
+  .page--dashboard .stats-grid .metric-card__icon,
+  .page--dashboard .stats-grid .metric-card__detail { display: none; }
+  .page--dashboard .stats-grid .metric-card__value { margin-top: 4px; font-size: 14px; }
+
+  /* Compact decision strip. */
+  .page--dashboard .orderflow-decision-strip { grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; padding: 8px 12px; }
+  .page--dashboard .orderflow-decision-strip .decision-strip__icon,
+  .page--dashboard .orderflow-decision-strip .decision-strip__heading .eyebrow,
+  .page--dashboard .orderflow-decision-strip .decision-strip__heading small { display: none; }
+  .page--dashboard .orderflow-decision-strip .decision-strip__directions { grid-column: auto; grid-row: auto; justify-self: auto; padding: 0 10px; border-right: 0; border-left: 1px solid var(--border-soft); }
+  .page--dashboard .orderflow-decision-strip > .badge { grid-column: auto; grid-row: auto; justify-self: auto; }
+}
+
+@media (max-width: 620px) {
+  .topbar__mobile-brand > span:last-child { display: none; }
+  /* Extend the chart drawing area to the screen edges. */
+  .page--dashboard .chart-card { margin: 0 -12px; border-right: 0; border-left: 0; border-radius: 0; }
+}
+
+@media (max-height: 520px) and (orientation: landscape) and (max-width: 860px) {
+  .page--dashboard .chart-visual { height: calc(100dvh - var(--topbar-height) - 96px); min-height: 200px; }
+}
